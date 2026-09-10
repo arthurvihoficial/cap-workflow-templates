@@ -1836,8 +1836,8 @@
         '#cap-resumo-toast.is-show{opacity:1;transform:translateY(0);}' +
         '#' +
         CFG.noticesHostId +
-        '{position:fixed;top:70px;left:50%;transform:translateX(-50%);z-index:2147483008;' +
-        'width:min(560px,calc(100vw - 24px));display:none;flex-direction:column;gap:8px;' +
+        '{position:fixed;top:14px;left:calc(50% + 280px);z-index:2147483008;' +
+        'width:min(360px,calc(50vw - 300px));display:none;flex-direction:column;gap:8px;' +
         'font-family:"Segoe UI",Tahoma,Arial,sans-serif;pointer-events:none;}' +
         '#' +
         CFG.noticesHostId +
@@ -1886,9 +1886,9 @@
         '#' +
         CFG.noticesHostId +
         ' .capn-novidade .capn-title{color:#145523;}' +
-        '@media (max-width:640px){#' +
+        '@media (max-width:960px){#' +
         CFG.noticesHostId +
-        '{top:96px;}}' +
+        '{top:96px;left:50%;transform:translateX(-50%);width:min(560px,calc(100vw - 24px));}}' +
         '.capr-pick-hover{outline:2px solid #2f6b9a !important;outline-offset:2px !important;cursor:crosshair !important;}' +
         '#' +
         CFG.suggestId +
