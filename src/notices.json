@@ -23,7 +23,7 @@
     {
       "id": "aviso-cajamar",
       "enabled": true,
-      "type": "aviso",
+      "type": "atencao",
       "title": "Orientação — Fab Cajamar",
       "message": "1. O SLA padrão de atendimento é de 3 horas.\n2. Não validamos informações utilizando o telefone informado pelo próprio motorista.\n3. As validações devem ser realizadas por meio dos contatos cadastrados no SAP, podendo também haver acionamento do vendedor responsável.\n 4. Não liberamos protocolos para motoristas que estejam fora do local, exceto mediante validação do próprio vendedor.\n 5. É obrigatório anexar o print da tela do Teams com a respectiva validação do vendedor.",
       "matchMode": "all",
