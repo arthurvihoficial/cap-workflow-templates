@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "updatedAt": "2026-09-09",
+  "refreshEveryMs": 300000,
+  "fields": {
+    "pedido": {
+      "labels": ["Número do Pedido", "Numero do Pedido", "Pedido"]
+    },
+    "emissor": {
+      "labels": ["Código emissor", "Codigo emissor", "Emissor"]
+    },
+    "centro": {
+      "labels": [
+        "Centro Expedição / Filial",
+        "Centro/Expedição",
+        "Centro Expedição",
+        "Centro/Expedicao",
+        "Filial"
+      ]
+    }
+  },
+  "notices": [
+    {
+      "id": "aviso-cajamar",
+      "enabled": true,
+      "type": "aviso",
+      "title": "Orientação — Fab Cajamar",
+      "message": "1. O SLA padrão de atendimento é de 3 horas.\n2. Não validamos informações utilizando o telefone informado pelo próprio motorista.\n3. As validações devem ser realizadas por meio dos contatos cadastrados no SAP, podendo também haver acionamento do vendedor responsável.\n 4. Não liberamos protocolos para motoristas que estejam fora do local, exceto mediante validação do próprio vendedor.\n 5. É obrigatório anexar o print da tela do Teams com a respectiva validação do vendedor.",
+      "matchMode": "all",
+      "match": {
+        "centro": ["4247", "4247 - Fab Cajamar", "Fab Cajamar"]
+      },
+      "dismissible": true
+    },
+    {
+      "id": "atencao-exemplo-emissor",
+      "enabled": false,
+      "type": "atencao",
+      "title": "Atenção — Emissor específico",
+      "message": "Este emissor exige validação extra de documentação antes de abrir o Pré CAP.",
+      "matchMode": "all",
+      "match": {
+        "emissor": ["1422193"]
+      },
+      "dismissible": true
+    },
+    {
+      "id": "novidade-exemplo-pedido",
+      "enabled": false,
+      "type": "novidade",
+      "title": "Novidade",
+      "message": "Novo fluxo disponível para este pedido. Siga o checklist atualizado no resumo.",
+      "matchMode": "all",
+      "match": {
+        "pedido": ["999999"]
+      },
+      "dismissible": true
+    }
+  ]
+}
