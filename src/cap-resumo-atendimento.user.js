@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CAP Workflow — Modelos de Resumo
 // @namespace    https://vcimentos.capworkflow.com/
-// @version      1.1.3
+// @version      1.1.2
 // @description  Modelos de resumo para Pré CAP - Atendimento
 // @author       Arthur Vinícius
 // @match        https://vcimentos.capworkflow.com/*
