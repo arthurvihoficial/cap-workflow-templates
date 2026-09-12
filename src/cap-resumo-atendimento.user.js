@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CAP Workflow — Modelos de Resumo
 // @namespace    https://vcimentos.capworkflow.com/
-// @version      1.1.2
+// @version      1.1.3
 // @description  Modelos de resumo para Pré CAP - Atendimento
 // @author       Arthur Vinícius
 // @match        https://vcimentos.capworkflow.com/*
@@ -33,7 +33,6 @@
       'https://raw.githubusercontent.com/arthurvihoficial/cap-workflow-templates/refs/heads/main/src/notices.json',
     checkEveryMs: 6 * 60 * 60 * 1000, // 6h
     lastCheckKey: 'cap_resumo_update_last_check',
-    dismissedKey: 'cap_resumo_update_dismissed',
     noticesLastKey: 'cap_resumo_notices_last_fetch',
     noticesCacheKey: 'cap_resumo_notices_cache_v1',
     noticesDismissKey: 'cap_resumo_notices_dismissed_v1'
@@ -49,10 +48,11 @@
     updateBarId: 'cap-resumo-update-bar',
     updateFloatId: 'cap-resumo-update-float',
     modalId: 'cap-resumo-modal',
+    folderModalId: 'cap-resumo-folder-modal',
     noticesHostId: 'cap-resumo-notices',
     foldersKey: 'cap_resumo_folders_v1',
     maxTpl: 100,
-    version: '1.1.2'
+    version: '1.1.3'
   };
 
   var DEFAULT_SETTINGS = {
@@ -78,6 +78,7 @@
   var remoteUpdate = null; // { version, changelog, url }
   var folders = ['Geral'];
   var noticesConfig = null;
+  var folderModalCtx = { mode: 'create', source: 'panel', oldName: '' };
   var noticesTimer = null;
   var contextWatchTimer = null;
   var lastContextKey = '';
@@ -241,7 +242,6 @@
       '</div>' +
       '<div class="capr-float-actions">' +
       '<button type="button" class="capr-btn update" data-act="do-update">Atualizar agora</button>' +
-      '<button type="button" class="capr-btn ghost" data-act="dismiss-update">Depois</button>' +
       '</div></div>';
     document.body.appendChild(el);
     if (!document._capUpdateFloatBound) {
@@ -252,26 +252,14 @@
         e.stopPropagation();
         var act = btn.getAttribute('data-act');
         if (act === 'do-update') openScriptUpdate();
-        if (act === 'dismiss-update') dismissUpdateUi();
       });
       document._capUpdateFloatBound = true;
     }
     return el;
   }
 
-  function dismissUpdateUi() {
-    if (remoteUpdate && remoteUpdate.version) {
-      GM_setValue(UPDATE.dismissedKey, remoteUpdate.version);
-    }
-    renderUpdateBar();
-  }
-
   function renderUpdateBar() {
     var show = !!(remoteUpdate && versionsDiffer(remoteUpdate.version, CFG.version));
-    var dismissed =
-      show && GM_getValue(UPDATE.dismissedKey, '') === remoteUpdate.version;
-    if (dismissed) show = false;
-
     var msg = updateMessageText();
 
     var bar = document.getElementById(CFG.updateBarId);
@@ -1484,22 +1472,28 @@
         '#' +
         CFG.fabId +
         '{' +
-        'position:fixed;right:16px;bottom:16px;z-index:2147483000;width:44px;height:44px;' +
-        'border:1px solid #2a5f86;border-radius:4px;cursor:pointer;color:#fff;background:#2f6b9a;' +
-        'box-shadow:0 1px 3px rgba(0,0,0,.18);display:flex;align-items:center;justify-content:center;}' +
+        'position:fixed;right:20px;bottom:20px;z-index:2147483000;width:56px;height:56px;' +
+        'border:0;border-radius:18px;cursor:pointer;color:#fff;' +
+        'background:linear-gradient(160deg,#3d7eb3 0%,#2f6b9a 55%,#255a84 100%);' +
+        'box-shadow:0 10px 28px rgba(31,74,110,.38),0 2px 6px rgba(15,23,42,.12);' +
+        'display:flex;align-items:center;justify-content:center;transition:transform .15s ease,box-shadow .15s ease,filter .15s ease;}' +
         '#' +
         CFG.fabId +
-        ':hover{background:#275a82;}' +
+        ':hover{filter:brightness(1.05);transform:translateY(-1px);' +
+        'box-shadow:0 14px 32px rgba(31,74,110,.42),0 3px 8px rgba(15,23,42,.14);}' +
         '#' +
         CFG.fabId +
-        ' svg{width:18px;height:18px;}' +
+        ':active{transform:translateY(0);}' +
+        '#' +
+        CFG.fabId +
+        ' svg{width:22px;height:22px;}' +
         '#' +
         CFG.panelId +
         '{' +
-        'position:fixed;right:16px;bottom:70px;width:min(380px,calc(100vw - 20px));' +
-        'max-height:min(680px,calc(100vh - 90px));z-index:2147483001;display:none;flex-direction:column;' +
-        'overflow:hidden;border-radius:4px;border:1px solid #b8c4d1;background:#fff;color:#212529;' +
-        'box-shadow:0 6px 24px rgba(33,37,41,.14);}' +
+        'position:fixed;right:20px;bottom:90px;width:min(400px,calc(100vw - 24px));' +
+        'max-height:min(720px,calc(100vh - 110px));z-index:2147483001;display:none;flex-direction:column;' +
+        'overflow:hidden;border-radius:14px;border:1px solid #d5dee8;background:#fff;color:#1f2937;' +
+        'box-shadow:0 18px 48px rgba(15,23,42,.18),0 2px 8px rgba(15,23,42,.06);}' +
         '#' +
         CFG.panelId +
         '.is-open{display:flex;}' +
@@ -1515,13 +1509,13 @@
         '#' +
         CFG.panelId +
         ' .capr-head{display:flex;align-items:center;justify-content:space-between;gap:8px;' +
-        'padding:10px 12px;background:#2f6b9a;color:#fff;}' +
+        'padding:14px 14px 12px;background:linear-gradient(160deg,#3d7eb3,#2f6b9a);color:#fff;}' +
         '#' +
         CFG.panelId +
         ' .capr-brand{display:flex;flex-direction:column;gap:1px;min-width:0;}' +
         '#' +
         CFG.panelId +
-        ' .capr-brand-name{font-size:13px;font-weight:600;letter-spacing:.01em;}' +
+        ' .capr-brand-name{font-size:14px;font-weight:700;letter-spacing:.01em;}' +
         '#' +
         CFG.panelId +
         ' .capr-brand-sub{font-size:11px;opacity:.85;}' +
@@ -1567,7 +1561,7 @@
         ' .capr-float-actions{display:flex;gap:6px;flex:0 0 auto;}' +
         '#' +
         CFG.updateFloatId +
-        ' .capr-btn{border:1px solid transparent;border-radius:3px;padding:7px 10px;font-size:12.5px;' +
+        ' .capr-btn{border:1px solid transparent;border-radius:8px;padding:8px 11px;font-size:12.5px;' +
         'font-weight:600;cursor:pointer;line-height:1.2;}' +
         '#' +
         CFG.updateFloatId +
@@ -1590,8 +1584,8 @@
         ' .capr-float-actions .capr-btn{flex:1;}}' +
         '#' +
         CFG.panelId +
-        ' .capr-ico{width:26px;height:26px;border:1px solid rgba(255,255,255,.35);background:transparent;' +
-        'color:#fff;border-radius:3px;cursor:pointer;font-size:13px;line-height:1;}' +
+        ' .capr-ico{width:28px;height:28px;border:1px solid rgba(255,255,255,.28);background:rgba(255,255,255,.08);' +
+        'border-radius:8px;color:#fff;cursor:pointer;font-size:13px;line-height:1;}' +
         '#' +
         CFG.panelId +
         ' .capr-ico:hover{background:rgba(255,255,255,.12);}' +
@@ -1691,17 +1685,18 @@
         ' .capr-meta{font-size:12px;color:#6c757d;}' +
         '#' +
         CFG.panelId +
-        ' .capr-list{overflow:auto;display:flex;flex-direction:column;gap:0;flex:1;min-height:120px;' +
-        'border:1px solid #d5dde6;border-radius:3px;background:#fff;}' +
+        ' .capr-list{overflow:auto;display:flex;flex-direction:column;gap:8px;flex:1;min-height:120px;' +
+        'border:0;border-radius:0;background:transparent;padding:2px;}' +
         '#' +
         CFG.panelId +
-        ' .capr-row{border-bottom:1px solid #e8eef4;padding:10px 11px;background:#fff;}' +
+        ' .capr-row{border:1px solid #e5edf5;border-radius:10px;padding:11px 12px;background:#fff;' +
+        'box-shadow:0 1px 2px rgba(15,23,42,.04);}' +
         '#' +
         CFG.panelId +
-        ' .capr-row:last-child{border-bottom:0;}' +
+        ' .capr-row:last-child{border-bottom:1px solid #e5edf5;}' +
         '#' +
         CFG.panelId +
-        ' .capr-row:hover{background:#f7fafc;}' +
+        ' .capr-row:hover{background:#f8fbff;border-color:#c9daf0;}' +
         '#' +
         CFG.panelId +
         ' .capr-row-top{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:4px;}' +
@@ -1728,20 +1723,20 @@
         ' .capr-confirm{margin-top:8px;padding:8px;border-radius:3px;background:#fff5f5;border:1px solid #f1c0c0;font-size:12px;color:#842029;}' +
         '#' +
         CFG.panelId +
-        ' .capr-footer{border-top:1px solid #d5dde6;padding:8px 12px;background:#fff;}' +
+        ' .capr-footer{border-top:1px solid #e5edf5;padding:12px;background:#fff;}' +
         '#' +
         CFG.panelId +
-        ' .capr-footer-btn{width:100%;border:1px dashed #9db0c3;background:#f8fbfe;color:#2f6b9a;' +
-        'font-size:13px;font-weight:650;cursor:pointer;padding:8px;border-radius:3px;}' +
+        ' .capr-footer-btn{width:100%;border:0;background:#2f6b9a;color:#fff;border-radius:8px;' +
+        'font-size:13px;font-weight:650;cursor:pointer;padding:10px 12px;}' +
         '#' +
         CFG.panelId +
-        ' .capr-footer-btn:hover{background:#eef5fb;}' +
+        ' .capr-footer-btn:hover{background:#275a82;}' +
         '#' +
         CFG.panelId +
         ' .capr-textarea{min-height:150px;resize:vertical;line-height:1.4;font-family:Consolas,"Courier New",monospace;}' +
         '#' +
         CFG.panelId +
-        ' .capr-footer-row{display:grid;grid-template-columns:1.4fr .8fr;gap:6px;}' +
+        ' .capr-footer-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;}' +
         '#' +
         CFG.modalId +
         '{position:fixed;inset:0;z-index:2147483020;display:none;align-items:center;justify-content:center;' +
@@ -1751,7 +1746,7 @@
         '.is-open{display:flex;}' +
         '#' +
         CFG.modalId +
-        ' .capr-modal{width:min(560px,100%);max-height:min(86vh,720px);display:flex;flex-direction:column;' +
+        ' .capr-modal{width:min(560px,100%);max-height:min(86vh,720px);display:flex;flex-direction:column;border-radius:14px;overflow:hidden;' +
         'background:#fff;border:1px solid #b8c4d1;border-radius:6px;overflow:hidden;' +
         'box-shadow:0 18px 50px rgba(15,23,42,.28);font-family:"Segoe UI",Tahoma,Arial,sans-serif;color:#212529;}' +
         '#' +
@@ -1823,6 +1818,68 @@
         CFG.modalId +
         ' .capr-btn.ghost:hover{background:#eef2f6;}' +
         '#' +
+        CFG.folderModalId +
+        '{position:fixed;inset:0;z-index:2147483030;display:none;align-items:center;justify-content:center;' +
+        'padding:18px;background:rgba(18,28,40,.5);backdrop-filter:blur(2px);}' +
+        '#' +
+        CFG.folderModalId +
+        '.is-open{display:flex;}' +
+        '#' +
+        CFG.folderModalId +
+        ' .capr-folder-modal{width:min(420px,100%);display:flex;flex-direction:column;overflow:hidden;' +
+        'background:#fff;border:1px solid #b8c4d1;border-radius:14px;' +
+        'box-shadow:0 18px 50px rgba(15,23,42,.32);font-family:"Segoe UI",Tahoma,Arial,sans-serif;color:#212529;}' +
+        '#' +
+        CFG.folderModalId +
+        ' .capr-folder-modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;' +
+        'padding:14px 16px;background:linear-gradient(180deg,#3474a4 0%,#2f6b9a 100%);color:#fff;}' +
+        '#' +
+        CFG.folderModalId +
+        ' .capr-folder-modal-title{font-size:15px;font-weight:700;letter-spacing:.01em;}' +
+        '#' +
+        CFG.folderModalId +
+        ' .capr-folder-modal-sub{font-size:12px;opacity:.88;margin-top:2px;}' +
+        '#' +
+        CFG.folderModalId +
+        ' .capr-folder-modal-close{width:30px;height:30px;border:1px solid rgba(255,255,255,.35);background:transparent;' +
+        'color:#fff;border-radius:3px;cursor:pointer;font-size:18px;line-height:1;}' +
+        '#' +
+        CFG.folderModalId +
+        ' .capr-folder-modal-close:hover{background:rgba(255,255,255,.12);}' +
+        '#' +
+        CFG.folderModalId +
+        ' .capr-folder-modal-body{display:grid;gap:10px;padding:16px;background:#f5f7fa;}' +
+        '#' +
+        CFG.folderModalId +
+        ' .capr-folder-modal-body label{font-size:12px;color:#495057;font-weight:650;}' +
+        '#' +
+        CFG.folderModalId +
+        ' .capr-folder-modal-body .capr-input{width:100%;border:1px solid #ced4da;border-radius:3px;padding:8px 10px;' +
+        'font-size:13px;outline:none;box-sizing:border-box;color:#212529;background:#fff;}' +
+        '#' +
+        CFG.folderModalId +
+        ' .capr-folder-modal-body .capr-input:focus{border-color:#80abd0;box-shadow:0 0 0 .15rem rgba(47,107,154,.18);}' +
+        '#' +
+        CFG.folderModalId +
+        ' .capr-folder-modal-foot{display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;background:#fff;' +
+        'border-top:1px solid #d5dde6;}' +
+        '#' +
+        CFG.folderModalId +
+        ' .capr-btn{border:1px solid transparent;border-radius:3px;padding:8px 12px;font-size:13px;' +
+        'font-weight:600;cursor:pointer;line-height:1.2;}' +
+        '#' +
+        CFG.folderModalId +
+        ' .capr-btn.primary{background:#2f6b9a;border-color:#2a5f86;color:#fff;}' +
+        '#' +
+        CFG.folderModalId +
+        ' .capr-btn.primary:hover{background:#275a82;}' +
+        '#' +
+        CFG.folderModalId +
+        ' .capr-btn.ghost{background:#fff;border-color:#c5ced8;color:#495057;}' +
+        '#' +
+        CFG.folderModalId +
+        ' .capr-btn.ghost:hover{background:#eef2f6;}' +
+        '#' +
         CFG.bannerId +
         '{' +
         'position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:2147483003;' +
@@ -1831,8 +1888,9 @@
         '#' +
         CFG.bannerId +
         '.is-show{display:block;}' +
-        '#cap-resumo-toast{position:fixed;right:16px;bottom:16px;z-index:2147483002;background:#1f2a37;color:#fff;' +
-        'border-radius:3px;padding:9px 12px;font-size:13px;opacity:0;transform:translateY(6px);pointer-events:none;transition:.16s ease;}' +
+        '#cap-resumo-toast{position:fixed;left:20px;bottom:20px;z-index:2147483002;max-width:min(340px,calc(100vw - 40px));' +
+        'background:#fff;color:#1f2937;border:1px solid #e5edf5;border-radius:12px;padding:12px 14px;font-size:13px;' +
+        'box-shadow:0 12px 28px rgba(15,23,42,.16);opacity:0;transform:translateY(8px);pointer-events:none;transition:.18s ease;}' +
         '#cap-resumo-toast.is-show{opacity:1;transform:translateY(0);}' +
         '#' +
         CFG.noticesHostId +
@@ -1947,7 +2005,10 @@
     fab.type = 'button';
     fab.title = 'Modelos de resumo (Alt+M)';
     fab.innerHTML =
-      '<svg viewBox="0 0 24 24" fill="none"><path d="M5 4.75h14A1.25 1.25 0 0 1 20.25 6v9.5A1.25 1.25 0 0 1 19 16.75h-5.2L9.8 20.3a.75.75 0 0 1-1.3-.53v-3.02H5A1.25 1.25 0 0 1 3.75 15.5V6A1.25 1.25 0 0 1 5 4.75Z" stroke="currentColor" stroke-width="1.6"/><path d="M8 9h8M8 12.5h5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
+      '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
+      '<path d="M7 4.5h10A2.5 2.5 0 0 1 19.5 7v7A2.5 2.5 0 0 1 17 16.5h-4.1L9.2 19.4a.75.75 0 0 1-1.2-.6v-2.3H7A2.5 2.5 0 0 1 4.5 14V7A2.5 2.5 0 0 1 7 4.5Z" fill="rgba(255,255,255,.16)" stroke="currentColor" stroke-width="1.5"/>' +
+      '<path d="M8.5 9h7M8.5 12h4.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>' +
+      '</svg>';
     fab.addEventListener('click', function (e) {
       e.preventDefault();
       e.stopPropagation();
@@ -1960,9 +2021,9 @@
       '<div class="capr-head">' +
       '<div class="capr-brand">' +
       '<div class="capr-brand-name">CAP · Modelos de Resumo</div>' +
-      '<div class="capr-brand-sub">Pré CAP · Atendimento · v' +
+      '<div class="capr-brand-sub">v' +
       CFG.version +
-      '</div>' +
+      ' · Pré CAP</div>' +
       '</div>' +
       '<div class="capr-head-actions">' +
       '<button type="button" class="capr-ico" data-act="check-update" title="Verificar atualização">↻</button>' +
@@ -1975,8 +2036,7 @@
       '">' +
       '<div class="capr-upd-msg" data-role="upd-msg">Versão do servidor diferente</div>' +
       '<div class="capr-upd-actions">' +
-      '<button type="button" class="capr-btn update" data-act="do-update">Usar esta versão</button>' +
-      '<button type="button" class="capr-btn ghost" data-act="dismiss-update">Depois</button>' +
+      '<button type="button" class="capr-btn update" data-act="do-update">Atualizar agora</button>' +
       '</div></div>' +
       '<div class="capr-body" data-view="list">' +
       '<div class="capr-toolbar">' +
@@ -2001,14 +2061,16 @@
       '<div class="capr-list" data-role="list"></div>' +
       '</div>' +
       '<div class="capr-footer" data-view="list">' +
-      '<div class="capr-footer-row">' +
       '<button type="button" class="capr-footer-btn" data-act="new">+ Novo modelo</button>' +
+      '<div class="capr-footer-row" style="margin-top:8px">' +
+      '<button type="button" class="capr-btn secondary" data-act="export" style="width:100%">Exportar</button>' +
       '<button type="button" class="capr-btn secondary" data-act="import" style="width:100%">Importar</button>' +
       '</div></div>';
 
     document.body.appendChild(fab);
     document.body.appendChild(panel);
     ensureModal();
+    ensureFolderModal();
 
     ui = {
       fab: fab,
@@ -2018,7 +2080,8 @@
       folders: panel.querySelector('[data-role="folders"]'),
       hint: panel.querySelector('[data-role="hint"]'),
       count: panel.querySelector('[data-role="count"]'),
-      modal: document.getElementById(CFG.modalId)
+      modal: document.getElementById(CFG.modalId),
+      folderModal: document.getElementById(CFG.folderModalId)
     };
 
     ui.search.addEventListener('input', function () {
@@ -2044,15 +2107,14 @@
       '</div>' +
       '<div class="capr-modal-body">' +
       '<label for="capr-modal-title">Nome do modelo</label>' +
-      '<input class="capr-input" id="capr-modal-title" data-f="title" placeholder="Ex.: Retorno ao solicitante" />' +
+      '<input class="capr-input" id="capr-modal-title" data-f="title" placeholder="Nome do modelo" />' +
       '<label for="capr-modal-folder">Pasta</label>' +
       '<div class="capr-modal-folder-row">' +
       '<select class="capr-select" id="capr-modal-folder" data-f="category"></select>' +
       '<button type="button" class="capr-btn ghost" data-act="modal-folder-new">Nova</button>' +
       '</div>' +
       '<label for="capr-modal-body">Conteúdo do resumo</label>' +
-      '<textarea class="capr-textarea" id="capr-modal-body" data-f="body" placeholder="Escreva o texto do modelo..."></textarea>' +
-      '<div class="capr-modal-hint">Variáveis opcionais: {{data}}, {{hora}}, {{solicitante}}, {{canal}}, {{status}}</div>' +
+      '<textarea class="capr-textarea" id="capr-modal-body" data-f="body" placeholder="Texto do resumo"></textarea>' +
       '</div>' +
       '<div class="capr-modal-foot">' +
       '<button type="button" class="capr-btn ghost" data-act="cancel-edit">Cancelar</button>' +
@@ -2071,14 +2133,165 @@
       if (act === 'modal-folder-new') return createFolderFromModal();
     });
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && wrap.classList.contains('is-open')) {
+      if (e.key !== 'Escape') return;
+      var folderModal = document.getElementById(CFG.folderModalId);
+      if (folderModal && folderModal.classList.contains('is-open')) {
+        e.preventDefault();
+        e.stopPropagation();
+        closeFolderModal();
+        return;
+      }
+      if (wrap.classList.contains('is-open')) {
         e.preventDefault();
         closeModal();
       }
     });
   }
 
+  function ensureFolderModal() {
+    if (document.getElementById(CFG.folderModalId)) return;
+    var wrap = document.createElement('div');
+    wrap.id = CFG.folderModalId;
+    wrap.innerHTML =
+      '<div class="capr-folder-modal" role="dialog" aria-modal="true">' +
+      '<div class="capr-folder-modal-head">' +
+      '<div>' +
+      '<div class="capr-folder-modal-title" data-role="folder-modal-title">Nova pasta</div>' +
+      '<div class="capr-folder-modal-sub" data-role="folder-modal-sub">Organize seus modelos</div>' +
+      '</div>' +
+      '<button type="button" class="capr-folder-modal-close" data-act="folder-modal-cancel" title="Fechar">×</button>' +
+      '</div>' +
+      '<div class="capr-folder-modal-body">' +
+      '<label for="capr-folder-modal-name">Nome da pasta</label>' +
+      '<input class="capr-input" id="capr-folder-modal-name" data-f="folder-name" placeholder="Nome da pasta" autocomplete="off" />' +
+      '</div>' +
+      '<div class="capr-folder-modal-foot">' +
+      '<button type="button" class="capr-btn ghost" data-act="folder-modal-cancel">Cancelar</button>' +
+      '<button type="button" class="capr-btn primary" data-act="folder-modal-save">Salvar pasta</button>' +
+      '</div></div>';
+    document.body.appendChild(wrap);
+    wrap.addEventListener('click', function (e) {
+      if (e.target === wrap) {
+        e.preventDefault();
+        e.stopPropagation();
+        closeFolderModal();
+        return;
+      }
+      var btn = e.target.closest('[data-act]');
+      if (!btn || !wrap.contains(btn)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      var act = btn.getAttribute('data-act');
+      if (act === 'folder-modal-cancel') return closeFolderModal();
+      if (act === 'folder-modal-save') return submitFolderModal();
+    });
+    var input = wrap.querySelector('[data-f="folder-name"]');
+    if (input) {
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          e.stopPropagation();
+          submitFolderModal();
+        }
+      });
+    }
+  }
+
+  function closeFolderModal() {
+    var modal = document.getElementById(CFG.folderModalId);
+    if (modal) modal.classList.remove('is-open');
+    folderModalCtx = { mode: 'create', source: 'panel', oldName: '' };
+  }
+
+  function openFolderModal(opts) {
+    ensureFolderModal();
+    opts = opts || {};
+    folderModalCtx = {
+      mode: opts.mode === 'rename' ? 'rename' : 'create',
+      source: opts.source === 'editor' ? 'editor' : 'panel',
+      oldName: opts.oldName || ''
+    };
+    var modal = document.getElementById(CFG.folderModalId);
+    var titleEl = modal.querySelector('[data-role="folder-modal-title"]');
+    var subEl = modal.querySelector('[data-role="folder-modal-sub"]');
+    var input = modal.querySelector('[data-f="folder-name"]');
+    var saveBtn = modal.querySelector('[data-act="folder-modal-save"]');
+    if (folderModalCtx.mode === 'rename') {
+      titleEl.textContent = 'Renomear pasta';
+      subEl.textContent = 'Atualize o nome da pasta selecionada';
+      saveBtn.textContent = 'Renomear';
+      input.value = folderModalCtx.oldName || '';
+    } else {
+      titleEl.textContent = 'Nova pasta';
+      subEl.textContent =
+        folderModalCtx.source === 'editor'
+          ? 'A pasta será selecionada neste modelo'
+          : 'Organize seus modelos por pasta';
+      saveBtn.textContent = 'Criar pasta';
+      input.value = '';
+    }
+    modal.classList.add('is-open');
+    setTimeout(function () {
+      try {
+        input.focus();
+        input.select();
+      } catch (e) {}
+    }, 30);
+  }
+
+  function submitFolderModal() {
+    var modal = document.getElementById(CFG.folderModalId);
+    if (!modal || !modal.classList.contains('is-open')) return;
+    var raw = modal.querySelector('[data-f="folder-name"]').value;
+    var name = normalizeFolderName(raw);
+    if (!name) return toast('Informe um nome para a pasta.');
+    if (name.toLowerCase() === 'todos') return toast('Nome de pasta inválido.');
+
+    if (folderModalCtx.mode === 'rename') {
+      var oldName = folderModalCtx.oldName;
+      if (!oldName || name === oldName) {
+        closeFolderModal();
+        return;
+      }
+      if (folders.indexOf(name) >= 0) return toast('Já existe uma pasta com esse nome.');
+      for (var i = 0; i < templates.length; i++) {
+        if ((templates[i].category || 'Geral') === oldName) templates[i].category = name;
+      }
+      folders = folders.map(function (f) {
+        return f === oldName ? name : f;
+      });
+      saveFolders();
+      saveTemplates();
+      state.category = name;
+      closeFolderModal();
+      renderAll();
+      var editorModal = document.getElementById(CFG.modalId);
+      if (editorModal && editorModal.classList.contains('is-open')) {
+        fillModalFolderSelect(name);
+      }
+      toast('Pasta renomeada.');
+      return;
+    }
+
+    ensureFolder(name);
+    var fromEditor = folderModalCtx.source === 'editor';
+    closeFolderModal();
+    if (fromEditor) {
+      fillModalFolderSelect(name);
+      renderFolders();
+    } else {
+      state.category = name;
+      renderAll();
+    }
+    toast('Pasta criada: ' + name);
+  }
+
   function closeModal() {
+    var folderModal = document.getElementById(CFG.folderModalId);
+    if (folderModal && folderModal.classList.contains('is-open')) {
+      closeFolderModal();
+      return;
+    }
     var modal = document.getElementById(CFG.modalId);
     if (modal) modal.classList.remove('is-open');
     state.editingId = null;
@@ -2103,14 +2316,7 @@
   }
 
   function createFolderFromModal() {
-    var name = window.prompt('Nome da nova pasta:', '');
-    name = normalizeFolderName(name);
-    if (!name) return;
-    if (name.toLowerCase() === 'todos') return toast('Nome de pasta inválido.');
-    ensureFolder(name);
-    fillModalFolderSelect(name);
-    renderFolders();
-    toast('Pasta criada: ' + name);
+    openFolderModal({ mode: 'create', source: 'editor' });
   }
 
   function applyWindowState() {
@@ -2166,10 +2372,6 @@
       openScriptUpdate();
       return;
     }
-    if (act === 'dismiss-update') {
-      dismissUpdateUi();
-      return;
-    }
     if (act === 'minimize') {
       settings.minimized = !settings.minimized;
       saveSettings();
@@ -2184,6 +2386,7 @@
     }
     if (act === 'new') return openEditor(null);
     if (act === 'import') return importTemplates();
+    if (act === 'export') return exportTemplates();
     if (act === 'edit') return openEditor(id);
     if (act === 'insert') return insertTemplate(id);
     if (act === 'folder-new') return createFolder();
@@ -2212,35 +2415,14 @@
   }
 
   function createFolder() {
-    var name = window.prompt('Nome da nova pasta:', '');
-    name = normalizeFolderName(name);
-    if (!name) return;
-    if (name.toLowerCase() === 'todos') return toast('Nome de pasta inválido.');
-    ensureFolder(name);
-    state.category = name;
-    renderAll();
-    toast('Pasta criada: ' + name);
+    openFolderModal({ mode: 'create', source: 'panel' });
   }
 
   function renameFolder() {
     if (!state.category || state.category === 'Todos' || state.category === 'Geral') {
       return toast('Selecione uma pasta personalizada para renomear.');
     }
-    var oldName = state.category;
-    var name = window.prompt('Novo nome da pasta:', oldName);
-    name = normalizeFolderName(name);
-    if (!name || name === oldName) return;
-    if (name.toLowerCase() === 'todos') return toast('Nome de pasta inválido.');
-    if (folders.indexOf(name) >= 0) return toast('Já existe uma pasta com esse nome.');
-    for (var i = 0; i < templates.length; i++) {
-      if ((templates[i].category || 'Geral') === oldName) templates[i].category = name;
-    }
-    folders = folders.map(function (f) { return f === oldName ? name : f; });
-    saveFolders();
-    saveTemplates();
-    state.category = name;
-    renderAll();
-    toast('Pasta renomeada.');
+    openFolderModal({ mode: 'rename', source: 'panel', oldName: state.category });
   }
 
   function deleteFolder() {
@@ -2590,33 +2772,116 @@
     document.addEventListener('keydown', onKey, true);
   }
 
-  function importTemplates() {
-    var raw = window.prompt('Cole aqui o JSON dos modelos:');
-    if (!raw) return;
-    try {
-      var parsed = JSON.parse(raw);
-      var list = Array.isArray(parsed) ? parsed : parsed.templates;
-      if (!Array.isArray(list) || !list.length) throw new Error('vazio');
-      var normalized = [];
-      for (var i = 0; i < list.length; i++) {
-        var t = list[i];
-        if (!t || !t.title || !t.body) continue;
-        normalized.push({
-          id: t.id || uid(),
-          title: String(t.title).slice(0, 120),
-          category: String(t.category || 'Geral').slice(0, 60),
-          tags: Array.isArray(t.tags) ? t.tags.map(String).slice(0, 12) : [],
-          body: String(t.body),
-          updatedAt: t.updatedAt || Date.now()
-        });
-        ensureFolder(normalized[normalized.length - 1].category);
+  function sanitizeImportText(input) {
+    var t = String(input || '').replace(/^\uFEFF/, '');
+    t = t
+      .replace(/[\u201C\u201D\u00AB\u00BB]/g, '"')
+      .replace(/[\u2018\u2019]/g, "'");
+    t = t.replace(/,\s*([}\]])/g, '$1');
+    return t.trim();
+  }
+
+  function escapeControlsInsideJsonStrings(src) {
+    var out = '';
+    var inString = false;
+    var escaped = false;
+    for (var i = 0; i < src.length; i++) {
+      var c = src.charAt(i);
+      var code = src.charCodeAt(i);
+      if (inString) {
+        if (escaped) {
+          out += c;
+          escaped = false;
+          continue;
+        }
+        if (c === '\\') {
+          out += c;
+          escaped = true;
+          continue;
+        }
+        if (c === '"') {
+          inString = false;
+          out += c;
+          continue;
+        }
+        if (code < 0x20) {
+          if (c === '\n') out += '\\n';
+          else if (c === '\r') out += '\\r';
+          else if (c === '\t') out += '\\t';
+          else {
+            var hex = code.toString(16);
+            while (hex.length < 4) hex = '0' + hex;
+            out += '\\u' + hex;
+          }
+          continue;
+        }
+        out += c;
+      } else {
+        if (c === '"') inString = true;
+        out += c;
       }
-      if (!normalized.length) throw new Error('inválidos');
+    }
+    return out;
+  }
+
+  function parseImportJson(raw) {
+    var cleaned = sanitizeImportText(raw);
+    var attempts = [cleaned, escapeControlsInsideJsonStrings(cleaned)];
+    var lastErr = null;
+    for (var i = 0; i < attempts.length; i++) {
+      try {
+        return JSON.parse(attempts[i]);
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    throw lastErr || new Error('JSON inválido');
+  }
+
+  function normalizeImportedTemplates(parsed) {
+    var list = parsed;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      if (Array.isArray(parsed.templates)) list = parsed.templates;
+      else if (Array.isArray(parsed.items)) list = parsed.items;
+      else if (Array.isArray(parsed.modelos)) list = parsed.modelos;
+    }
+    if (!Array.isArray(list)) throw new Error('JSON inválido');
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+      var t = list[i];
+      if (!t) continue;
+      var title = String(t.title || t.nome || t.name || '')
+        .replace(/[\u0000-\u001F]/g, '')
+        .trim();
+      var body = String(t.body || t.text || t.mensagem || '')
+        .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')
+        .trim();
+      if (!title || !body) continue;
+      out.push({
+        id: t.id || uid(),
+        title: title.slice(0, 120),
+        category: String(t.category || t.tag || t.pasta || 'Geral')
+          .replace(/[\u0000-\u001F]/g, '')
+          .slice(0, 60),
+        tags: Array.isArray(t.tags) ? t.tags.map(String).slice(0, 12) : [],
+        body: body,
+        updatedAt: t.updatedAt || Date.now()
+      });
+      ensureFolder(out[out.length - 1].category);
+    }
+    if (!out.length) throw new Error('Nenhum modelo válido');
+    return out;
+  }
+
+  function applyImportedTemplates(normalized, mode) {
+    if (mode === 'replace') {
+      templates = normalized.slice(0, CFG.maxTpl);
+    } else {
       for (var n = 0; n < normalized.length; n++) {
         var incoming = normalized[n];
         var found = false;
         for (var j = 0; j < templates.length; j++) {
-          if (templates[j].title.toLowerCase() === incoming.title.toLowerCase()) {
+          if (String(templates[j].title || '').toLowerCase() === String(incoming.title || '').toLowerCase()) {
             incoming.id = templates[j].id;
             templates[j] = incoming;
             found = true;
@@ -2626,12 +2891,81 @@
         if (!found) templates.push(incoming);
       }
       if (templates.length > CFG.maxTpl) templates = templates.slice(0, CFG.maxTpl);
-      saveTemplates();
-      renderAll();
-      toast('Importação concluída.');
-    } catch (e) {
-      toast('JSON inválido.');
     }
+    saveTemplates();
+    renderAll();
+    toast(mode === 'replace' ? 'Modelos substituídos.' : 'Importação concluída.');
+  }
+
+  function exportTemplates() {
+    var payload = {
+      version: CFG.version,
+      exportedAt: new Date().toISOString(),
+      templates: templates
+    };
+    var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'cap-modelos-resumo.json';
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () {
+      URL.revokeObjectURL(a.href);
+      a.remove();
+    }, 800);
+    toast('Arquivo exportado.');
+  }
+
+  function importTemplatesFromRaw(raw) {
+    try {
+      var parsed = parseImportJson(raw);
+      var normalized = normalizeImportedTemplates(parsed);
+      var mode = 'merge';
+      if (templates.length) {
+        var merge = window.confirm(
+          'Encontrei ' +
+            normalized.length +
+            ' modelo(s) no arquivo.\n\nOK = mesclar com os atuais\nCancelar = substituir tudo'
+        );
+        if (merge) {
+          mode = 'merge';
+        } else {
+          var sure = window.confirm('Substituir TODOS os modelos atuais pelos do arquivo?');
+          if (!sure) {
+            toast('Importação cancelada.');
+            return;
+          }
+          mode = 'replace';
+        }
+      }
+      applyImportedTemplates(normalized, mode);
+    } catch (e) {
+      toast('Falha ao importar JSON. Use o arquivo exportado.');
+      console.warn('[CAP Resumo] import:', e);
+    }
+  }
+
+  function importTemplates() {
+    var input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/json,.json,text/plain,.txt';
+    input.style.display = 'none';
+    document.body.appendChild(input);
+    input.addEventListener('change', function () {
+      var file = input.files && input.files[0];
+      input.remove();
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function () {
+        importTemplatesFromRaw(String(reader.result || ''));
+      };
+      reader.onerror = function () {
+        toast('Não foi possível ler o arquivo.');
+      };
+      reader.readAsText(file);
+    });
+    input.click();
   }
 
   function highlight(el) {
