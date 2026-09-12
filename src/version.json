@@ -1,6 +1,6 @@
 {
- "version": "1.1.2",
- "changelog": "Orientações de atendimento para unidade 4247 - FAB Cajamar",
+ "version": "1.1.3",
+ "changelog": "Ajuste e melhorias na interface, melhoria no sistema de importação e exportação!",
  "downloadUrl": "https://raw.githubusercontent.com/arthurvihoficial/cap-workflow-templates/refs/heads/main/src/cap-resumo-atendimento.user.js",
- "publishedAt": "2026-09-10"
+ "publishedAt": "2026-09-12"
 }
