@@ -52,7 +52,7 @@
     noticesHostId: 'cap-resumo-notices',
     foldersKey: 'cap_resumo_folders_v1',
     maxTpl: 100,
-    version: '1.1.3'
+    version: '1.1.2'
   };
 
   var DEFAULT_SETTINGS = {
