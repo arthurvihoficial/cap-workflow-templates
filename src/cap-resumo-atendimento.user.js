@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         CAP Workflow — Modelos de Resumo
 // @namespace    https://vcimentos.capworkflow.com/
-// @version      1.1.2
-// @description  Modelos de resumo para Pré CAP - Atendimento
+// @version      1.1.3
+// @description  Modelos de resumo para Pré CAP - Atendimento (UI renovada)
 // @author       Arthur Vinícius
 // @match        https://vcimentos.capworkflow.com/*
 // @match        https://*.capworkflow.com/*
@@ -49,10 +49,11 @@
     updateFloatId: 'cap-resumo-update-float',
     modalId: 'cap-resumo-modal',
     folderModalId: 'cap-resumo-folder-modal',
+    importModalId: 'cap-resumo-import-modal',
     noticesHostId: 'cap-resumo-notices',
     foldersKey: 'cap_resumo_folders_v1',
     maxTpl: 100,
-    version: '1.1.2'
+    version: '1.1.3'
   };
 
   var DEFAULT_SETTINGS = {
@@ -79,6 +80,11 @@
   var folders = ['Geral'];
   var noticesConfig = null;
   var folderModalCtx = { mode: 'create', source: 'panel', oldName: '' };
+  var importModalState = {
+    fileName: '',
+    items: null,
+    mode: 'merge'
+  };
   var noticesTimer = null;
   var contextWatchTimer = null;
   var lastContextKey = '';
@@ -1880,6 +1886,133 @@
         CFG.folderModalId +
         ' .capr-btn.ghost:hover{background:#eef2f6;}' +
         '#' +
+        CFG.importModalId +
+        '{position:fixed;inset:0;z-index:2147483035;display:none;align-items:center;justify-content:center;' +
+        'padding:18px;background:rgba(18,28,40,.5);backdrop-filter:blur(2px);}' +
+        '#' +
+        CFG.importModalId +
+        '.is-open{display:flex;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-import-modal{width:min(480px,100%);display:flex;flex-direction:column;overflow:hidden;' +
+        'background:#fff;border:1px solid #b8c4d1;border-radius:14px;' +
+        'box-shadow:0 18px 50px rgba(15,23,42,.32);font-family:"Segoe UI",Tahoma,Arial,sans-serif;color:#212529;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-import-modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;' +
+        'padding:14px 16px;background:linear-gradient(180deg,#3474a4 0%,#2f6b9a 100%);color:#fff;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-import-modal-title{font-size:15px;font-weight:700;letter-spacing:.01em;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-import-modal-sub{font-size:12px;opacity:.88;margin-top:2px;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-import-modal-close{width:30px;height:30px;border:1px solid rgba(255,255,255,.35);background:transparent;' +
+        'color:#fff;border-radius:3px;cursor:pointer;font-size:18px;line-height:1;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-import-modal-close:hover{background:rgba(255,255,255,.12);}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-import-modal-body{display:grid;gap:12px;padding:16px;background:#f5f7fa;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-import-drop{border:1.5px dashed #b7c5d4;border-radius:10px;background:#fff;padding:22px 16px;' +
+        'text-align:center;cursor:pointer;transition:.15s ease;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-import-drop:hover,#' +
+        CFG.importModalId +
+        ' .capr-import-drop.is-drag{border-color:#2f6b9a;background:#f3f8fc;box-shadow:0 0 0 3px rgba(47,107,154,.12);}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-import-drop-icon{width:42px;height:42px;margin:0 auto 10px;border-radius:10px;display:flex;' +
+        'align-items:center;justify-content:center;background:#e8f1f8;color:#2f6b9a;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-import-drop-title{font-size:14px;font-weight:700;color:#1f3b57;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-import-drop-sub{font-size:12px;color:#6c757d;margin-top:4px;line-height:1.4;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-import-file{display:none;align-items:center;gap:10px;padding:12px;border:1px solid #d5dde6;' +
+        'border-radius:10px;background:#fff;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-import-file.is-show{display:flex;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-import-file-ico{width:36px;height:36px;border-radius:8px;background:#eef5fb;color:#2f6b9a;' +
+        'display:flex;align-items:center;justify-content:center;flex:0 0 auto;font-weight:700;font-size:11px;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-import-file-meta{min-width:0;flex:1;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-import-file-name{font-size:13px;font-weight:650;color:#1f2937;overflow:hidden;' +
+        'text-overflow:ellipsis;white-space:nowrap;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-import-file-info{font-size:12px;color:#6b7280;margin-top:2px;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-import-clear{border:0;background:transparent;color:#9ca3af;cursor:pointer;font-size:18px;line-height:1;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-import-clear:hover{color:#b91c1c;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-import-modes{display:grid;grid-template-columns:1fr 1fr;gap:8px;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-import-mode{border:1px solid #d5dde6;border-radius:10px;background:#fff;padding:12px;cursor:pointer;' +
+        'text-align:left;transition:.15s ease;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-import-mode:hover{border-color:#93b7d4;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-import-mode.is-active{border-color:#2f6b9a;background:#f3f8fc;box-shadow:0 0 0 2px rgba(47,107,154,.14);}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-import-mode-title{font-size:13px;font-weight:700;color:#1f3b57;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-import-mode-desc{font-size:11px;color:#6b7280;margin-top:4px;line-height:1.4;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-import-warn{display:none;font-size:12px;color:#9a3412;background:#fff7ed;border:1px solid #fdba74;' +
+        'border-radius:8px;padding:8px 10px;line-height:1.4;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-import-warn.is-show{display:block;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-import-modal-foot{display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;background:#fff;' +
+        'border-top:1px solid #d5dde6;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-btn{border:1px solid transparent;border-radius:3px;padding:8px 12px;font-size:13px;' +
+        'font-weight:600;cursor:pointer;line-height:1.2;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-btn.primary{background:#2f6b9a;border-color:#2a5f86;color:#fff;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-btn.primary:hover{background:#275a82;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-btn.primary:disabled{opacity:.55;cursor:not-allowed;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-btn.ghost{background:#fff;border-color:#c5ced8;color:#495057;}' +
+        '#' +
+        CFG.importModalId +
+        ' .capr-btn.ghost:hover{background:#eef2f6;}' +
+        '#' +
         CFG.bannerId +
         '{' +
         'position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:2147483003;' +
@@ -2071,6 +2204,7 @@
     document.body.appendChild(panel);
     ensureModal();
     ensureFolderModal();
+    ensureImportModal();
 
     ui = {
       fab: fab,
@@ -2081,7 +2215,8 @@
       hint: panel.querySelector('[data-role="hint"]'),
       count: panel.querySelector('[data-role="count"]'),
       modal: document.getElementById(CFG.modalId),
-      folderModal: document.getElementById(CFG.folderModalId)
+      folderModal: document.getElementById(CFG.folderModalId),
+      importModal: document.getElementById(CFG.importModalId)
     };
 
     ui.search.addEventListener('input', function () {
@@ -2134,6 +2269,13 @@
     });
     document.addEventListener('keydown', function (e) {
       if (e.key !== 'Escape') return;
+      var importModal = document.getElementById(CFG.importModalId);
+      if (importModal && importModal.classList.contains('is-open')) {
+        e.preventDefault();
+        e.stopPropagation();
+        closeImportModal();
+        return;
+      }
       var folderModal = document.getElementById(CFG.folderModalId);
       if (folderModal && folderModal.classList.contains('is-open')) {
         e.preventDefault();
@@ -2201,6 +2343,194 @@
     var modal = document.getElementById(CFG.folderModalId);
     if (modal) modal.classList.remove('is-open');
     folderModalCtx = { mode: 'create', source: 'panel', oldName: '' };
+  }
+
+  function ensureImportModal() {
+    if (document.getElementById(CFG.importModalId)) return;
+    var wrap = document.createElement('div');
+    wrap.id = CFG.importModalId;
+    wrap.innerHTML =
+      '<div class="capr-import-modal" role="dialog" aria-modal="true">' +
+      '<div class="capr-import-modal-head">' +
+      '<div>' +
+      '<div class="capr-import-modal-title">Importar modelos</div>' +
+      '<div class="capr-import-modal-sub">Traga modelos de um arquivo JSON</div>' +
+      '</div>' +
+      '<button type="button" class="capr-import-modal-close" data-act="import-cancel" title="Fechar">×</button>' +
+      '</div>' +
+      '<div class="capr-import-modal-body">' +
+      '<div class="capr-import-drop" data-role="import-drop">' +
+      '<div class="capr-import-drop-icon" aria-hidden="true">' +
+      '<svg width="22" height="22" viewBox="0 0 24 24" fill="none">' +
+      '<path d="M12 16V4m0 0l4 4m-4-4L8 8M5 16v2a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>' +
+      '</svg></div>' +
+      '<div class="capr-import-drop-title">Arraste o arquivo JSON aqui</div>' +
+      '<div class="capr-import-drop-sub">ou clique para escolher · exportado pelo CAP Resumo</div>' +
+      '</div>' +
+      '<input type="file" data-role="import-file-input" accept="application/json,.json,text/plain,.txt" hidden />' +
+      '<div class="capr-import-file" data-role="import-file">' +
+      '<div class="capr-import-file-ico">JSON</div>' +
+      '<div class="capr-import-file-meta">' +
+      '<div class="capr-import-file-name" data-role="import-file-name">arquivo.json</div>' +
+      '<div class="capr-import-file-info" data-role="import-file-info">0 modelos</div>' +
+      '</div>' +
+      '<button type="button" class="capr-import-clear" data-act="import-clear" title="Remover arquivo">×</button>' +
+      '</div>' +
+      '<div class="capr-import-modes">' +
+      '<button type="button" class="capr-import-mode is-active" data-act="import-mode" data-mode="merge">' +
+      '<div class="capr-import-mode-title">Mesclar</div>' +
+      '<div class="capr-import-mode-desc">Mantém os atuais e adiciona/atualiza os do arquivo</div>' +
+      '</button>' +
+      '<button type="button" class="capr-import-mode" data-act="import-mode" data-mode="replace">' +
+      '<div class="capr-import-mode-title">Substituir</div>' +
+      '<div class="capr-import-mode-desc">Apaga os modelos atuais e usa só os do arquivo</div>' +
+      '</button>' +
+      '</div>' +
+      '<div class="capr-import-warn" data-role="import-warn">Atenção: substituir remove todos os modelos atuais deste navegador.</div>' +
+      '</div>' +
+      '<div class="capr-import-modal-foot">' +
+      '<button type="button" class="capr-btn ghost" data-act="import-cancel">Cancelar</button>' +
+      '<button type="button" class="capr-btn primary" data-act="import-confirm" disabled>Importar</button>' +
+      '</div></div>';
+    document.body.appendChild(wrap);
+
+    var drop = wrap.querySelector('[data-role="import-drop"]');
+    var fileInput = wrap.querySelector('[data-role="import-file-input"]');
+
+    wrap.addEventListener('click', function (e) {
+      if (e.target === wrap) {
+        closeImportModal();
+        return;
+      }
+      var btn = e.target.closest('[data-act]');
+      if (!btn || !wrap.contains(btn)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      var act = btn.getAttribute('data-act');
+      if (act === 'import-cancel') return closeImportModal();
+      if (act === 'import-clear') return resetImportModalFile();
+      if (act === 'import-mode') {
+        importModalState.mode = btn.getAttribute('data-mode') === 'replace' ? 'replace' : 'merge';
+        refreshImportModalUi();
+        return;
+      }
+      if (act === 'import-confirm') return confirmImportModal();
+    });
+
+    drop.addEventListener('click', function () {
+      fileInput.click();
+    });
+    fileInput.addEventListener('change', function () {
+      var file = fileInput.files && fileInput.files[0];
+      fileInput.value = '';
+      if (file) readImportFile(file);
+    });
+
+    ['dragenter', 'dragover'].forEach(function (evName) {
+      drop.addEventListener(evName, function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        drop.classList.add('is-drag');
+      });
+    });
+    ['dragleave', 'drop'].forEach(function (evName) {
+      drop.addEventListener(evName, function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        drop.classList.remove('is-drag');
+      });
+    });
+    drop.addEventListener('drop', function (e) {
+      var file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (file) readImportFile(file);
+    });
+  }
+
+  function resetImportModalFile() {
+    importModalState.fileName = '';
+    importModalState.items = null;
+    refreshImportModalUi();
+  }
+
+  function refreshImportModalUi() {
+    var modal = document.getElementById(CFG.importModalId);
+    if (!modal) return;
+    var drop = modal.querySelector('[data-role="import-drop"]');
+    var fileBox = modal.querySelector('[data-role="import-file"]');
+    var nameEl = modal.querySelector('[data-role="import-file-name"]');
+    var infoEl = modal.querySelector('[data-role="import-file-info"]');
+    var warn = modal.querySelector('[data-role="import-warn"]');
+    var confirmBtn = modal.querySelector('[data-act="import-confirm"]');
+    var hasFile = !!(importModalState.items && importModalState.items.length);
+    drop.style.display = hasFile ? 'none' : 'block';
+    fileBox.classList.toggle('is-show', hasFile);
+    if (hasFile) {
+      nameEl.textContent = importModalState.fileName || 'arquivo.json';
+      infoEl.textContent =
+        importModalState.items.length +
+        ' modelo' +
+        (importModalState.items.length === 1 ? '' : 's') +
+        ' · ' +
+        templates.length +
+        ' atual' +
+        (templates.length === 1 ? '' : 'is') +
+        ' neste navegador';
+    }
+    modal.querySelectorAll('[data-act="import-mode"]').forEach(function (btn) {
+      btn.classList.toggle('is-active', btn.getAttribute('data-mode') === importModalState.mode);
+    });
+    warn.classList.toggle('is-show', importModalState.mode === 'replace' && hasFile);
+    confirmBtn.disabled = !hasFile;
+    confirmBtn.textContent = importModalState.mode === 'replace' ? 'Substituir modelos' : 'Mesclar modelos';
+  }
+
+  function openImportModal() {
+    ensureImportModal();
+    importModalState = { fileName: '', items: null, mode: templates.length ? 'merge' : 'replace' };
+    refreshImportModalUi();
+    var modal = document.getElementById(CFG.importModalId);
+    modal.classList.add('is-open');
+  }
+
+  function closeImportModal() {
+    var modal = document.getElementById(CFG.importModalId);
+    if (modal) modal.classList.remove('is-open');
+    importModalState = { fileName: '', items: null, mode: 'merge' };
+  }
+
+  function readImportFile(file) {
+    if (!file) return;
+    var name = String(file.name || 'arquivo.json');
+    if (!/\.(json|txt)$/i.test(name) && file.type && file.type.indexOf('json') < 0 && file.type.indexOf('text') < 0) {
+      return toast('Selecione um arquivo JSON.');
+    }
+    var reader = new FileReader();
+    reader.onload = function () {
+      try {
+        var parsed = parseImportJson(String(reader.result || ''));
+        var normalized = normalizeImportedTemplates(parsed);
+        importModalState.fileName = name;
+        importModalState.items = normalized;
+        if (!templates.length) importModalState.mode = 'replace';
+        refreshImportModalUi();
+      } catch (e) {
+        toast('JSON inválido. Use o arquivo exportado pelo CAP.');
+        console.warn('[CAP Resumo] import parse:', e);
+      }
+    };
+    reader.onerror = function () {
+      toast('Não foi possível ler o arquivo.');
+    };
+    reader.readAsText(file);
+  }
+
+  function confirmImportModal() {
+    if (!importModalState.items || !importModalState.items.length) {
+      return toast('Escolha um arquivo para importar.');
+    }
+    var mode = importModalState.mode === 'replace' ? 'replace' : 'merge';
+    applyImportedTemplates(importModalState.items, mode);
+    closeImportModal();
   }
 
   function openFolderModal(opts) {
@@ -2947,25 +3277,7 @@
   }
 
   function importTemplates() {
-    var input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'application/json,.json,text/plain,.txt';
-    input.style.display = 'none';
-    document.body.appendChild(input);
-    input.addEventListener('change', function () {
-      var file = input.files && input.files[0];
-      input.remove();
-      if (!file) return;
-      var reader = new FileReader();
-      reader.onload = function () {
-        importTemplatesFromRaw(String(reader.result || ''));
-      };
-      reader.onerror = function () {
-        toast('Não foi possível ler o arquivo.');
-      };
-      reader.readAsText(file);
-    });
-    input.click();
+    openImportModal();
   }
 
   function highlight(el) {
