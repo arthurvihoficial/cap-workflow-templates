@@ -49,7 +49,7 @@
       "enabled": true,
       "type": "aviso",
       "title": "Aviso",
-      "message": "Cliente migrou de Cajamar para Diadema, entrega obrigatória, não validar devolução caso motorista acione!",
+      "message": "Cliente migrou de Cajamar para Diadema, entrega obrigatória, não validar devolução caso motorista acione! Entrar em contato com shelida.bordim@vcimentos.com",
       "matchMode": "all",
       "match": {
         "pedido": ["2052938720", "2052939017", "2052939058"]
