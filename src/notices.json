@@ -48,7 +48,7 @@
       "id": "novidade-exemplo-pedido",
       "enabled": true,
       "type": "aviso",
-      "title": "Aviso",
+      "title": "Entrega obrigatória!",
       "message": "Cliente migrou de Cajamar para Diadema, entrega obrigatória, não validar devolução caso motorista acione! Entrar em contato com shelida.bordim@vcimentos.com",
       "matchMode": "all",
       "match": {
