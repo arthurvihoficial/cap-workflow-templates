@@ -46,7 +46,7 @@
     },
     {
       "id": "novidade-exemplo-pedido",
-      "enabled": false,
+      "enabled": true,
       "type": "aviso",
       "title": "Aviso",
       "message": "Cliente migrou de Cajamar para Diadema, entrega obrigatória, não validar devolução caso motorista acione!",
