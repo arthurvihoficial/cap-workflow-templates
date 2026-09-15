@@ -47,12 +47,12 @@
     {
       "id": "novidade-exemplo-pedido",
       "enabled": false,
-      "type": "novidade",
-      "title": "Novidade",
-      "message": "Novo fluxo disponível para este pedido. Siga o checklist atualizado no resumo.",
+      "type": "aviso",
+      "title": "Aviso",
+      "message": "Cliente migrou de Cajamar para Diadema, entrega obrigatória, não validar devolução caso motorista acione!",
       "matchMode": "all",
       "match": {
-        "pedido": ["999999"]
+        "pedido": ["2052938720", "2052939017", "2052939058"]
       },
       "dismissible": true
     }
