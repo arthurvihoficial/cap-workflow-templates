@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         CAP Workflow — Modelos de Resumo
 // @namespace    https://vcimentos.capworkflow.com/
-// @version      1.1.3
-// @description  Modelos de resumo para Pré CAP - Atendimento (UI renovada)
+// @version      1.2.0
+// @description  Modelos de resumo e bloqueio Enviar Solicitação se Pré CAP estiver em andamento
 // @author       Arthur Vinícius
 // @match        https://vcimentos.capworkflow.com/*
 // @match        https://*.capworkflow.com/*
@@ -50,10 +50,13 @@
     modalId: 'cap-resumo-modal',
     folderModalId: 'cap-resumo-folder-modal',
     importModalId: 'cap-resumo-import-modal',
+    dupModalId: 'cap-resumo-dup-modal',
     noticesHostId: 'cap-resumo-notices',
     foldersKey: 'cap_resumo_folders_v1',
     maxTpl: 100,
-    version: '1.1.3'
+    version: '1.2.0',
+    dupGatewayName: 'Pré CAP - mesmo número de pedido',
+    dupServiceId: 2316
   };
 
   var DEFAULT_SETTINGS = {
@@ -88,6 +91,24 @@
   var noticesTimer = null;
   var contextWatchTimer = null;
   var lastContextKey = '';
+  var dupCheck = {
+    lastPedido: '',
+    lastShownPedido: '',
+    lastShownCapId: '',
+    timer: null,
+    wrapTimer: null,
+    spyInstalled: false,
+    swalWrapped: false,
+    observer: null,
+    inFlight: false,
+    lastResult: null,
+    suppressUntil: 0,
+    statusCache: {},
+    continuarBlocked: false,
+    blockedPedido: '',
+    continuarGuardInstalled: false,
+    continuarWatchTimer: null
+  };
 
   var state = {
     query: '',
@@ -700,7 +721,19 @@
     // mudou pedido/centro/emissor → libera avisos dispensados nesta sessão
     if (lastContextKey) clearDismissedNotices();
     lastContextKey = key;
+    var p = normalizePedido(ctx.pedido);
+    if (p) dupCheck.lastPedido = p;
+    else if (dupCheck.lastPedido) {
+      dupCheck.lastPedido = '';
+      dupCheck.lastShownPedido = '';
+      dupCheck.lastShownCapId = '';
+      dupCheck.lastResult = null;
+      setContinuarBlocked(false);
+      closeDupModal();
+    }
     renderContextNotices();
+    // dispara a checagem nativa do CAP quando o pedido estiver completo
+    scheduleDupCheck(ctx.pedido);
   }
 
   function observeContextColumns() {
@@ -790,6 +823,1037 @@
         true
       );
     } catch (e) {}
+  }
+
+  function getPageWindow() {
+    try {
+      if (typeof unsafeWindow !== 'undefined' && unsafeWindow) return unsafeWindow;
+    } catch (e0) {}
+    return window;
+  }
+
+  function normalizePedido(value) {
+    return String(value || '')
+      .replace(/\s+/g, '')
+      .trim();
+  }
+
+  function pedidoLooksReady(pedido) {
+    var p = normalizePedido(pedido);
+    // pedidos SAP costumam ter 8–12 dígitos; evita lixo curto
+    return /^\d{8,14}$/.test(p);
+  }
+
+  function isValidCapRequestId(id) {
+    var s = String(id || '').replace(/\D/g, '');
+    // IDs de solicitação CAP (ex.: 4594008) — nunca strings gigantes concatenadas
+    return /^\d{5,10}$/.test(s);
+  }
+
+  function isClosedCapStatus(status) {
+    var s = String(status || '').trim();
+    if (!s) return false;
+    return /^(Completed|Canceled|Cancelled|Interrupted)$/i.test(s) ||
+      /conclu[ií]d|cancelad|finalizad|interromp/i.test(s);
+  }
+
+  function isOpenCapStatus(status) {
+    var s = String(status || '').trim();
+    if (!s) return false;
+    if (isClosedCapStatus(s)) return false;
+    return /^(Running|Uninitialized|Draft|Errored)$/i.test(s) ||
+      /em andamento|running|aberto|rascunho|pendente|em aberto/i.test(s);
+  }
+
+  /** Só checa duplicidade em formulário Pré CAP editável (não em solicitação concluída). */
+  function isEditablePreCapContext() {
+    try {
+      var fields = Object.assign({}, defaultNoticeFields(), (noticesConfig && noticesConfig.fields) || {});
+      var pedidoRoot = resolveNoticeFieldRoot(fields.pedido);
+      if (!pedidoRoot) return false;
+
+      if (pedidoRoot.querySelector('.select2-container--disabled, .select2-container-disabled')) {
+        return false;
+      }
+
+      var ctrl = pedidoRoot.querySelector(
+        'input:not([type="hidden"]), select, textarea'
+      );
+      if (!ctrl) return false;
+      if (ctrl.disabled || ctrl.readOnly) return false;
+      if (ctrl.getAttribute('aria-disabled') === 'true') return false;
+
+      // página de detalhes em modo leitura costuma desabilitar campos; se o pedido
+      // ainda é editável, seguimos (novo Pré CAP / tarefa em andamento)
+      return true;
+    } catch (e2) {
+      return false;
+    }
+  }
+
+  function parseCapStatusFromSoap(xml) {
+    var raw = String(xml || '');
+    // Status da solicitação vem logo após o bloco </Service>
+    var m = raw.match(/<\/Service>\s*<Status>\s*([^<]+)\s*<\/Status>/i);
+    if (m) return String(m[1] || '').trim();
+    var all = [];
+    var re = /<Status>\s*([^<]+)\s*<\/Status>/gi;
+    var x;
+    while ((x = re.exec(raw))) {
+      var v = String(x[1] || '').trim();
+      if (/^(Running|Uninitialized|Completed|Canceled|Cancelled|Interrupted|Errored|Draft)$/i.test(v)) {
+        all.push(v);
+      }
+    }
+    // ignora Status do Service (Published/Disabled/Draft) quando possível
+    for (var i = 0; i < all.length; i++) {
+      if (!/^(Draft)$/i.test(all[i]) || all.length === 1) return all[i];
+    }
+    return all.length ? all[all.length - 1] : '';
+  }
+
+  function parseCapStatusFromDetailsHtml(html) {
+    var raw = String(html || '');
+    var m =
+      raw.match(/WorkflowStatus["'\s:=]+([A-Za-zÀ-ÿ]+)/i) ||
+      raw.match(/RequestStatus["'\s:=]+([A-Za-zÀ-ÿ]+)/i) ||
+      raw.match(/"status"\s*:\s*"([^"]+)"/i) ||
+      raw.match(/Status\s*<\/[^>]+>\s*<[^>]+>([^<]{3,40})</i);
+    if (m) return String(m[1] || '').trim();
+    if (/conclu[ií]d[oa]/i.test(raw) && /cancelad/i.test(raw) === false) {
+      // heurística fraca — só usa se aparecer badge típico
+      if (/badge[^>]*>\s*Conclu[ií]d/i.test(raw) || /label[^>]*>\s*Conclu[ií]d/i.test(raw)) {
+        return 'Completed';
+      }
+    }
+    if (/badge[^>]*>\s*Em andamento/i.test(raw) || /label[^>]*>\s*Em andamento/i.test(raw)) {
+      return 'Running';
+    }
+    if (/badge[^>]*>\s*Cancelad/i.test(raw) || /label[^>]*>\s*Cancelad/i.test(raw)) {
+      return 'Canceled';
+    }
+    return '';
+  }
+
+  /**
+   * Descobre se a solicitação CAP ainda está aberta.
+   * cb(isOpen): true=aberta, false=concluída/cancelada, null=não soube
+   */
+  function fetchCapRequestOpenState(capId, cb) {
+    var id = String(capId || '').replace(/\D/g, '');
+    if (!isValidCapRequestId(id)) return cb(null);
+    var cached = dupCheck.statusCache[id];
+    if (cached && Date.now() - cached.at < 90 * 1000) {
+      return cb(cached.isOpen);
+    }
+
+    function finish(status) {
+      var isOpen;
+      if (isClosedCapStatus(status)) isOpen = false;
+      else if (isOpenCapStatus(status)) isOpen = true;
+      else isOpen = null;
+      dupCheck.statusCache[id] = { isOpen: isOpen, status: status, at: Date.now() };
+      cb(isOpen);
+    }
+
+    var origin = location.origin || 'https://vcimentos.capworkflow.com';
+    var soap =
+      '<?xml version="1.0" encoding="utf-8"?>' +
+      '<soap12:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" ' +
+      'xmlns:xsd="http://www.w3.org/2001/XMLSchema" ' +
+      'xmlns:soap12="http://www.w3.org/2003/05/soap-envelope">' +
+      '<soap12:Body><GetRequestDetails xmlns="http://iteris.cap.webservices">' +
+      '<requestId>' +
+      id +
+      '</requestId><cultureName>pt-BR</cultureName>' +
+      '</GetRequestDetails></soap12:Body></soap12:Envelope>';
+
+    function tryDetailsHtml() {
+      var url = buildCapRequestUrl(id);
+      var w = getPageWindow();
+      if (w.fetch) {
+        w.fetch(url, { credentials: 'same-origin', method: 'GET' })
+          .then(function (res) {
+            return res.text();
+          })
+          .then(function (html) {
+            finish(parseCapStatusFromDetailsHtml(html));
+          })
+          .catch(function () {
+            finish('');
+          });
+        return;
+      }
+      try {
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', url, true);
+        xhr.withCredentials = true;
+        xhr.onload = function () {
+          finish(parseCapStatusFromDetailsHtml(xhr.responseText || ''));
+        };
+        xhr.onerror = function () {
+          finish('');
+        };
+        xhr.send();
+      } catch (e0) {
+        finish('');
+      }
+    }
+
+    function trySoap() {
+      var w = getPageWindow();
+      var endpoint = origin + '/Services/CAPRequests.asmx';
+      if (w.fetch) {
+        w.fetch(endpoint, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/soap+xml; charset=utf-8' },
+          body: soap
+        })
+          .then(function (res) {
+            return res.text();
+          })
+          .then(function (xml) {
+            var st = parseCapStatusFromSoap(xml);
+            if (st) finish(st);
+            else tryDetailsHtml();
+          })
+          .catch(function () {
+            tryDetailsHtml();
+          });
+        return;
+      }
+      try {
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', endpoint, true);
+        xhr.withCredentials = true;
+        xhr.setRequestHeader('Content-Type', 'application/soap+xml; charset=utf-8');
+        xhr.onload = function () {
+          var st = parseCapStatusFromSoap(xhr.responseText || '');
+          if (st) finish(st);
+          else tryDetailsHtml();
+        };
+        xhr.onerror = function () {
+          tryDetailsHtml();
+        };
+        xhr.send(soap);
+      } catch (e1) {
+        tryDetailsHtml();
+      }
+    }
+
+    trySoap();
+  }
+
+  /** Só abre o modal se o Pré CAP encontrado ainda estiver aberto. */
+  function maybeShowDupModal(info) {
+    if (!info) return;
+    var capId = String(info.capId || (info.requestIds && info.requestIds[0]) || '').replace(/\D/g, '');
+    if (!isValidCapRequestId(capId)) return;
+    if (!isEditablePreCapContext()) {
+      dismissNativeDupSwal();
+      setEnviarBlocked(false);
+      restoreEnviarSolicitacao();
+      setTimeout(disableNativeSwalSuppress, 200);
+      return;
+    }
+    fetchCapRequestOpenState(capId, function (isOpen) {
+      // concluído/cancelado → não avisa, libera e restaura Enviar Solicitação
+      if (isOpen === false) {
+        setEnviarBlocked(false);
+        closeDupModal();
+        dismissNativeDupSwal();
+        restoreEnviarSolicitacao();
+        // CAP às vezes demora a recriar o rodapé
+        setTimeout(restoreEnviarSolicitacao, 200);
+        setTimeout(restoreEnviarSolicitacao, 800);
+        setTimeout(disableNativeSwalSuppress, 200);
+        return;
+      }
+      // só bloqueia Enviar quando confirmado em andamento
+      showDupModal(info);
+      if (isOpen === true) {
+        setEnviarBlocked(true, info.pedido || dupCheck.lastPedido);
+      } else {
+        // status desconhecido: avisa, mas não trava o envio
+        setEnviarBlocked(false);
+      }
+    });
+  }
+
+  function enviarButtonLabel(el) {
+    if (!el) return '';
+    if (el.tagName === 'INPUT') return String(el.value || '').replace(/\s+/g, ' ').trim();
+    var aria = String(el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+    var title = String(el.getAttribute('title') || '').replace(/\s+/g, ' ').trim();
+    var txt = String(el.textContent || '').replace(/\s+/g, ' ').trim();
+    return (aria || title || txt).replace(/\s+/g, ' ').trim();
+  }
+
+  function isEnviarSolicitacaoButton(el) {
+    if (!el || isOurUi(el)) return false;
+    var tag = (el.tagName || '').toUpperCase();
+    if (tag !== 'BUTTON' && tag !== 'A' && tag !== 'INPUT') return false;
+    var label = enviarButtonLabel(el);
+    if (!label || label.length > 48) return false;
+    return /enviar\s+solicita[cç][aã]o/i.test(label);
+  }
+
+  function findEnviarSolicitacaoButtons(includeHidden) {
+    var out = [];
+    var seen = {};
+    var nodes = document.querySelectorAll(
+      'button, a.btn, a.button, input[type="button"], input[type="submit"], [role="button"]'
+    );
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      if (!isEnviarSolicitacaoButton(el)) continue;
+      if (!includeHidden) {
+        var st = window.getComputedStyle ? window.getComputedStyle(el) : null;
+        if (el.hidden) continue;
+        if (st && (st.display === 'none' || st.visibility === 'hidden')) continue;
+      }
+      if (seen[el]) continue;
+      seen[el] = true;
+      out.push(el);
+    }
+    return out;
+  }
+
+  function applyEnviarBlockedStyles(el, blocked) {
+    if (!el) return;
+    if (blocked) {
+      el.classList.add('capr-enviar-blocked');
+      el.setAttribute('aria-disabled', 'true');
+      el.setAttribute('data-capr-enviar-blocked', '1');
+      try {
+        if ('disabled' in el) el.disabled = true;
+      } catch (e0) {}
+      try {
+        el.setAttribute('tabindex', '-1');
+      } catch (e1) {}
+      if (!el.getAttribute('data-capr-title-prev')) {
+        el.setAttribute('data-capr-title-prev', el.getAttribute('title') || '');
+        el.setAttribute(
+          'title',
+          'Pré CAP em andamento para este pedido — Enviar Solicitação bloqueado'
+        );
+      }
+    } else if (el.getAttribute('data-capr-enviar-blocked') === '1' || el.classList.contains('capr-enviar-blocked')) {
+      el.classList.remove('capr-enviar-blocked');
+      el.removeAttribute('aria-disabled');
+      el.removeAttribute('data-capr-enviar-blocked');
+      try {
+        if ('disabled' in el) el.disabled = false;
+      } catch (e2) {}
+      try {
+        el.removeAttribute('tabindex');
+      } catch (e3) {}
+      var prev = el.getAttribute('data-capr-title-prev');
+      if (prev != null) {
+        if (prev) el.setAttribute('title', prev);
+        else el.removeAttribute('title');
+        el.removeAttribute('data-capr-title-prev');
+      }
+    }
+  }
+
+  /** Quando o CAP existente está concluído, o native às vezes esconde o botão — reexibe. */
+  function restoreEnviarSolicitacao() {
+    var buttons = findEnviarSolicitacaoButtons(true);
+    for (var i = 0; i < buttons.length; i++) {
+      var el = buttons[i];
+      applyEnviarBlockedStyles(el, false);
+      try {
+        el.hidden = false;
+        el.removeAttribute('hidden');
+        if (el.style) {
+          if (el.style.display === 'none') el.style.display = '';
+          if (el.style.visibility === 'hidden') el.style.visibility = '';
+          if (el.style.opacity === '0') el.style.opacity = '';
+        }
+        el.classList.remove('hidden', 'd-none', 'hide', 'ng-hide', 'invisible');
+        if ('disabled' in el) el.disabled = false;
+      } catch (e0) {}
+      // sobe um nível se o wrapper foi o escondido
+      try {
+        var wrap = el.closest('.btn-group, .form-actions, .workflow-actions, .modal-footer, .actions, footer');
+        if (wrap && wrap !== document.body) {
+          if (wrap.style && wrap.style.display === 'none' && /enviar\s+solicita/i.test(wrap.textContent || '')) {
+            wrap.style.display = '';
+          }
+          wrap.classList.remove('hidden', 'd-none', 'hide');
+        }
+      } catch (e1) {}
+    }
+  }
+
+  function refreshEnviarBlockedUi() {
+    var buttons = findEnviarSolicitacaoButtons(true);
+    for (var i = 0; i < buttons.length; i++) {
+      applyEnviarBlockedStyles(buttons[i], !!dupCheck.continuarBlocked);
+    }
+    if (!dupCheck.continuarBlocked) {
+      var stale = document.querySelectorAll('[data-capr-enviar-blocked="1"], .capr-enviar-blocked');
+      for (var j = 0; j < stale.length; j++) {
+        applyEnviarBlockedStyles(stale[j], false);
+      }
+      // limpa legado do nome antigo
+      var legacy = document.querySelectorAll('[data-capr-continuar-blocked="1"], .capr-continuar-blocked');
+      for (var k = 0; k < legacy.length; k++) {
+        legacy[k].classList.remove('capr-continuar-blocked');
+        legacy[k].removeAttribute('data-capr-continuar-blocked');
+        try {
+          if ('disabled' in legacy[k]) legacy[k].disabled = false;
+        } catch (e0) {}
+      }
+    }
+  }
+
+  function setEnviarBlocked(blocked, pedido) {
+    dupCheck.continuarBlocked = !!blocked;
+    dupCheck.blockedPedido = blocked ? normalizePedido(pedido || dupCheck.lastPedido) : '';
+    refreshEnviarBlockedUi();
+    if (blocked) {
+      clearInterval(dupCheck.continuarWatchTimer);
+      dupCheck.continuarWatchTimer = setInterval(function () {
+        if (!dupCheck.continuarBlocked) {
+          clearInterval(dupCheck.continuarWatchTimer);
+          dupCheck.continuarWatchTimer = null;
+          return;
+        }
+        refreshEnviarBlockedUi();
+      }, 800);
+    } else {
+      clearInterval(dupCheck.continuarWatchTimer);
+      dupCheck.continuarWatchTimer = null;
+      restoreEnviarSolicitacao();
+    }
+  }
+
+  // aliases antigos (chamadas internas)
+  function setContinuarBlocked(blocked, pedido) {
+    setEnviarBlocked(blocked, pedido);
+  }
+
+  function installContinuarClickGuard() {
+    if (dupCheck.continuarGuardInstalled) return;
+    dupCheck.continuarGuardInstalled = true;
+    document.addEventListener(
+      'click',
+      function (e) {
+        if (!dupCheck.continuarBlocked) return;
+        var t = e.target;
+        if (!t || !t.closest) return;
+        var btn = t.closest('button, a, input[type="button"], input[type="submit"], [role="button"]');
+        if (!btn || !isEnviarSolicitacaoButton(btn)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+        refreshEnviarBlockedUi();
+        if (dupCheck.lastResult) showDupModal(dupCheck.lastResult);
+      },
+      true
+    );
+    document.addEventListener(
+      'keydown',
+      function (e) {
+        if (!dupCheck.continuarBlocked) return;
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        var t = e.target;
+        if (!t || !isEnviarSolicitacaoButton(t)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+      },
+      true
+    );
+  }
+
+  function isDupPedidoMessage(text) {
+    var t = String(text || '');
+    // frase exata do SweetAlert nativo do Pré CAP
+    return (
+      /utilizado no CAP/i.test(t) &&
+      /abertura ser[aá] bloqueada/i.test(t)
+    );
+  }
+
+  function buildCapRequestUrl(capId) {
+    var id = String(capId || '').replace(/\D/g, '');
+    if (!isValidCapRequestId(id)) return '';
+    var origin = location.origin || 'https://vcimentos.capworkflow.com';
+    return origin + '/Request/Details/' + id;
+  }
+
+  function extractCapLinkFromHtml(html) {
+    var out = { capId: '', url: '', requestIds: [] };
+    var raw = String(html || '');
+    if (!raw) return out;
+
+    function accept(id, url) {
+      id = String(id || '').replace(/\D/g, '');
+      if (!isValidCapRequestId(id)) return false;
+      out.capId = id;
+      out.requestIds = [id];
+      out.url = url || '';
+      return true;
+    }
+
+    try {
+      if (typeof DOMParser !== 'undefined') {
+        var doc = new DOMParser().parseFromString('<div id="capr-parse">' + raw + '</div>', 'text/html');
+        var root = doc.getElementById('capr-parse') || doc.body;
+        var anchors = root.querySelectorAll('a[href]');
+        for (var i = 0; i < anchors.length; i++) {
+          var a = anchors[i];
+          var txt = String(a.textContent || '').trim();
+          var href = a.getAttribute('href') || '';
+          var txtId = txt.replace(/\D/g, '');
+          // texto do link deve ser só o número do CAP (ex.: 4594008)
+          if (txtId !== txt.replace(/\s+/g, '') && !/^\d{5,10}$/.test(txt)) {
+            txtId = '';
+          }
+          if (!isValidCapRequestId(txtId)) txtId = '';
+          var hrefId = '';
+          var hm = href.match(/(?:RequestId|requestId|Details\/|Request\/(?:Details|Index)\/|id=)(\d{5,10})\b/i);
+          if (hm) hrefId = hm[1];
+          if (accept(txtId || hrefId, href)) break;
+        }
+      }
+    } catch (e0) {}
+
+    if (!out.capId) {
+      var am = raw.match(
+        /utilizado no CAP\s*<a[^>]*href=["']([^"']+)["'][^>]*>\s*(\d{5,10})\s*<\/a>/i
+      );
+      if (am) accept(am[2], am[1]);
+    }
+    if (!out.capId) {
+      var am2 = raw.match(/<a[^>]*href=["']([^"']+)["'][^>]*>\s*(\d{5,10})\s*<\/a>/i);
+      if (am2 && /utilizado no CAP/i.test(raw)) accept(am2[2], am2[1]);
+    }
+    if (!out.capId) {
+      var m = raw.match(/utilizado no CAP\s*(?:<[^>]*>)?\s*(\d{5,10})\b/i);
+      if (m) accept(m[1], '');
+    }
+
+    if (out.capId && (!out.url || out.url === '#' || out.url.indexOf('javascript:') === 0)) {
+      out.url = buildCapRequestUrl(out.capId);
+    } else if (out.url && out.url.charAt(0) === '/') {
+      out.url = (location.origin || '') + out.url;
+    }
+    return out;
+  }
+
+  function parseDupGatewayPayload(raw, pedido) {
+    if (raw == null) return null;
+    var text = typeof raw === 'string' ? raw : '';
+    var obj = null;
+    if (typeof raw === 'object') {
+      obj = raw;
+      try {
+        text = JSON.stringify(raw);
+      } catch (e0) {
+        text = String(raw);
+      }
+    } else {
+      text = String(raw || '');
+      try {
+        if (/^\s*[\[{]/.test(text)) obj = JSON.parse(text);
+      } catch (e1) {}
+    }
+
+    var lower = text.toLowerCase();
+    if (
+      lower.indexOf('mt_inf_cli') >= 0 ||
+      lower.indexOf('<kunnr>') >= 0 ||
+      lower.indexOf('inf_cliente') >= 0
+    ) {
+      return null;
+    }
+
+    // NÃO usar status/workflowStatus isolado — no CAP status 1 aparece em vários gateways
+    if (!isDupPedidoMessage(text)) return null;
+
+    var link = extractCapLinkFromHtml(text);
+    var capId = link.capId;
+    var capUrl = link.url;
+    if (obj && !capId) {
+      capId = String(
+        obj.requestId ||
+          obj.RequestId ||
+          obj.idSolicitacao ||
+          (obj.data && (obj.data.requestId || obj.data.RequestId)) ||
+          ''
+      ).replace(/\D/g, '');
+      if (!isValidCapRequestId(capId)) capId = '';
+      capUrl = String(obj.url || obj.link || obj.href || '') || capUrl;
+    }
+    if (!isValidCapRequestId(capId)) return null;
+    if (!capUrl) capUrl = buildCapRequestUrl(capId);
+
+    var ped = normalizePedido(pedido) || dupCheck.lastPedido;
+    if (!pedidoLooksReady(ped)) ped = '';
+
+    return {
+      pedido: ped,
+      status: 'bloqueado',
+      capId: capId,
+      capUrl: capUrl,
+      requestIds: [capId]
+    };
+  }
+
+  function enableNativeSwalSuppress() {
+    // desativado: esconder TODOS os SweetAlerts quebrava o "Continuar" em qualquer fluxo
+  }
+
+  function disableNativeSwalSuppress() {
+    dupCheck.suppressUntil = 0;
+    try {
+      document.documentElement.classList.remove('capr-dup-suppress-swal');
+      document.body.classList.remove('capr-dup-suppress-swal');
+    } catch (e1) {}
+  }
+
+  function dismissNativeDupSwal(root) {
+    try {
+      var nodes = root
+        ? [root]
+        : Array.prototype.slice.call(
+            document.querySelectorAll('.swal2-container, .sweet-alert, .swal2-popup')
+          );
+      var removed = false;
+      for (var i = 0; i < nodes.length; i++) {
+        var n = nodes[i];
+        if (!n || !n.parentNode) continue;
+        var host = n.classList.contains('swal2-container') ? n : n.closest('.swal2-container') || n;
+        var txt = String(host.textContent || '');
+        // só remove o SweetAlert de pedido duplicado — nunca outros avisos do CAP
+        if (!isDupPedidoMessage(txt)) continue;
+        try {
+          host.remove();
+        } catch (e0) {
+          try {
+            host.style.display = 'none';
+          } catch (e1) {}
+        }
+        removed = true;
+      }
+      // NÃO chama Swal.close() global — isso fecha o feedback do Continuar
+      if (removed) {
+        try {
+          var w = getPageWindow();
+          if (w.Swal && typeof w.Swal.isVisible === 'function' && w.Swal.isVisible()) {
+            var parts = [];
+            try {
+              if (typeof w.Swal.getHtmlContainer === 'function' && w.Swal.getHtmlContainer()) {
+                parts.push(w.Swal.getHtmlContainer().textContent || '');
+              }
+              if (typeof w.Swal.getTitle === 'function' && w.Swal.getTitle()) {
+                parts.push(w.Swal.getTitle().textContent || '');
+              }
+            } catch (e2) {}
+            if (isDupPedidoMessage(parts.join(' ')) && typeof w.Swal.close === 'function') {
+              w.Swal.close();
+            }
+          }
+        } catch (e3) {}
+      }
+    } catch (e4) {}
+  }
+
+  function ensureDupModal() {
+    if (document.getElementById(CFG.dupModalId)) return;
+    var wrap = document.createElement('div');
+    wrap.id = CFG.dupModalId;
+    wrap.innerHTML =
+      '<div class="capr-dup-modal" role="dialog" aria-modal="true" aria-labelledby="capr-dup-title">' +
+      '<div class="capr-dup-icon" aria-hidden="true">' +
+      '<svg viewBox="0 0 52 52" width="52" height="52">' +
+      '<circle cx="26" cy="26" r="24" fill="none" stroke="#e07470" stroke-width="2"/>' +
+      '<path d="M18 18l16 16M34 18L18 34" fill="none" stroke="#e07470" stroke-width="2.5" stroke-linecap="round"/>' +
+      '</svg></div>' +
+      '<div class="capr-dup-title" id="capr-dup-title">Pré CAP já existente</div>' +
+      '<div class="capr-dup-msg" data-role="dup-msg">Este pedido já está sendo utilizado. A abertura será bloqueada.</div>' +
+      '<div class="capr-dup-card">' +
+      '<div class="capr-dup-row"><span>Pedido</span><strong data-role="dup-pedido">—</strong></div>' +
+      '<div class="capr-dup-row" data-role="dup-cap-row" hidden>' +
+      '<span>Pré CAP</span>' +
+      '<a class="capr-dup-link" data-role="dup-cap-link" href="#" target="_blank" rel="noopener noreferrer">—</a>' +
+      '</div></div>' +
+      '<div class="capr-dup-foot">' +
+      '<a class="capr-btn primary" data-role="dup-open" data-dup-act="open" href="#" target="_blank" rel="noopener noreferrer" hidden>Abrir Pré CAP</a>' +
+      '<button type="button" class="capr-btn ghost" data-dup-act="close">OK</button>' +
+      '</div></div>';
+    document.body.appendChild(wrap);
+    wrap.addEventListener('click', function (e) {
+      if (e.target === wrap) {
+        e.preventDefault();
+        return closeDupModal();
+      }
+      var btn = e.target.closest('[data-dup-act]');
+      if (!btn || !wrap.contains(btn)) return;
+      var act = btn.getAttribute('data-dup-act');
+      if (act === 'close') {
+        e.preventDefault();
+        closeDupModal();
+      }
+      // act === 'open' → deixa o <a> navegar normalmente
+    });
+  }
+
+  function closeDupModal() {
+    var modal = document.getElementById(CFG.dupModalId);
+    if (modal) modal.classList.remove('is-open');
+    setTimeout(disableNativeSwalSuppress, 300);
+  }
+
+  function showDupModal(info) {
+    if (!info) return;
+    var pedido = normalizePedido(info.pedido) || dupCheck.lastPedido || '';
+    if (pedido && !pedidoLooksReady(pedido)) pedido = '';
+    var capId = String(info.capId || (info.requestIds && info.requestIds[0]) || '').replace(/\D/g, '');
+    // IDs concatenados / barcode / lixo de gateway → nunca abrir modal
+    if (!isValidCapRequestId(capId)) return;
+    var capUrl = info.capUrl || buildCapRequestUrl(capId);
+    if (!capUrl || !isValidCapRequestId(capId)) return;
+
+    // evita spam do mesmo aviso
+    if (
+      pedido &&
+      pedido === dupCheck.lastShownPedido &&
+      capId === dupCheck.lastShownCapId
+    ) {
+      ensureDupModal();
+      var existing = document.getElementById(CFG.dupModalId);
+      if (existing && !existing.classList.contains('is-open')) existing.classList.add('is-open');
+      dismissNativeDupSwal();
+      // bloqueio do Enviar fica a cargo do maybeShowDupModal (só se em andamento)
+      return;
+    }
+
+    ensureDupModal();
+    dismissNativeDupSwal();
+    var modal = document.getElementById(CFG.dupModalId);
+    if (!modal) return;
+
+    var pedidoEl = modal.querySelector('[data-role="dup-pedido"]');
+    var msgEl = modal.querySelector('[data-role="dup-msg"]');
+    var capRow = modal.querySelector('[data-role="dup-cap-row"]');
+    var capLink = modal.querySelector('[data-role="dup-cap-link"]');
+    var openBtn = modal.querySelector('[data-role="dup-open"]');
+
+    if (pedidoEl) pedidoEl.textContent = pedido || '—';
+    if (msgEl) {
+      msgEl.innerHTML =
+        'Este pedido está sendo utilizado no CAP ' +
+        '<a class="capr-dup-link" href="' +
+        escAttr(capUrl) +
+        '" target="_blank" rel="noopener noreferrer">' +
+        escHtml(capId) +
+        '</a>. A abertura será bloqueada.';
+    }
+    if (capRow && capLink && openBtn) {
+      capLink.textContent = capId;
+      capLink.href = capUrl;
+      openBtn.href = capUrl;
+      openBtn.hidden = false;
+      capRow.hidden = false;
+    }
+
+    dupCheck.lastShownPedido = pedido;
+    dupCheck.lastShownCapId = capId;
+    dupCheck.lastResult = {
+      pedido: pedido,
+      capId: capId,
+      capUrl: capUrl,
+      requestIds: [capId],
+      status: info.status
+    };
+    modal.classList.add('is-open');
+  }
+
+  function handleDupPayload(raw, pedido) {
+    var info = parseDupGatewayPayload(raw, pedido || dupCheck.lastPedido);
+    if (!info) return false;
+    maybeShowDupModal(info);
+    return true;
+  }
+
+  function handleDupFromSwalOpts(opts) {
+    var html = '';
+    var text = '';
+    var title = '';
+    if (typeof opts === 'string') {
+      html = opts;
+      text = opts;
+    } else if (opts && typeof opts === 'object') {
+      html = String(opts.html || '');
+      text = String(opts.text || '');
+      title = String(opts.title || '');
+    }
+    var blob = [title, html, text].join(' ');
+    if (!isDupPedidoMessage(blob) && !isDupPedidoMessage(html) && !isDupPedidoMessage(text)) {
+      return false;
+    }
+    var link = extractCapLinkFromHtml(html || text || title);
+    if (!isValidCapRequestId(link.capId)) {
+      // tenta no texto puro (às vezes o número vem sem <a>)
+      link = extractCapLinkFromHtml(String(html || text || '').replace(/<[^>]+>/g, ' '));
+    }
+    if (!isValidCapRequestId(link.capId)) return false;
+    var cached = dupCheck.statusCache[link.capId];
+    if (cached && cached.isOpen === false && Date.now() - cached.at < 90 * 1000) {
+      // já sabemos que está concluído — engole o Oops e restaura Enviar
+      setEnviarBlocked(false);
+      setTimeout(restoreEnviarSolicitacao, 0);
+      setTimeout(restoreEnviarSolicitacao, 250);
+      setTimeout(restoreEnviarSolicitacao, 900);
+      return true;
+    }
+    // intercepta o nativo; só bloqueia Enviar se o Pré CAP existente ainda estiver aberto
+    maybeShowDupModal({
+      pedido: dupCheck.lastPedido || normalizePedido(getFormContext().pedido),
+      capId: link.capId,
+      capUrl: link.url,
+      requestIds: link.requestIds,
+      status: 'bloqueado'
+    });
+    return true;
+  }
+
+  function normalizeSwalArgs(args) {
+    if (!args || !args.length) return {};
+    if (args.length === 1) {
+      if (typeof args[0] === 'string') return { title: args[0] };
+      return args[0] || {};
+    }
+    // Swal.fire(title, text, icon)
+    return {
+      title: args[0],
+      text: args[1],
+      icon: args[2]
+    };
+  }
+
+  function installSwalInterceptor() {
+    var w = getPageWindow();
+
+    function wrapFire(owner, key) {
+      if (!owner || typeof owner[key] !== 'function' || owner[key]._capDupWrapped) return false;
+      var original = owner[key];
+      var wrapped = function () {
+        var opts = normalizeSwalArgs(arguments);
+        if (handleDupFromSwalOpts(opts)) {
+          // remove só o Swal de duplicidade (se já renderizou); não mexe nos demais
+          setTimeout(function () {
+            dismissNativeDupSwal();
+          }, 0);
+          return Promise.resolve({
+            isConfirmed: true,
+            isDenied: false,
+            isDismissed: false,
+            value: true
+          });
+        }
+        return original.apply(this, arguments);
+      };
+      wrapped._capDupWrapped = true;
+      wrapped._capDupOriginal = original;
+      owner[key] = wrapped;
+      return true;
+    }
+
+    // Só envolve .fire — NÃO substitui o objeto Swal por proxy (quebrava Continuar)
+    if (w.Swal && typeof w.Swal.fire === 'function') {
+      wrapFire(w.Swal, 'fire');
+      try {
+        w.Swal._capDupFireWrapped = true;
+      } catch (e0) {}
+    }
+    if (w.swal && w.swal !== w.Swal && typeof w.swal.fire === 'function') {
+      wrapFire(w.swal, 'fire');
+    }
+    // swal legado global (função), sem trocar referência se já envolvido
+    if (typeof w.swal === 'function' && !w.swal._capDupWrapped && !(w.swal.fire && w.swal.fire._capDupWrapped)) {
+      // só se for a API antiga swal(title, text, type) sem .fire
+      if (typeof w.swal.fire !== 'function') wrapFire(w, 'swal');
+    }
+
+    dupCheck.swalWrapped = !!(w.Swal && w.Swal.fire && w.Swal.fire._capDupWrapped);
+  }
+
+  function installSwalDomGuard() {
+    if (dupCheck.observer) return;
+    try {
+      dupCheck.observer = new MutationObserver(function (mutations) {
+        for (var i = 0; i < mutations.length; i++) {
+          var nodes = mutations[i].addedNodes;
+          for (var j = 0; j < nodes.length; j++) {
+            var n = nodes[j];
+            if (!n || n.nodeType !== 1) continue;
+            var host =
+              n.matches && n.matches('.swal2-container, .sweet-alert')
+                ? n
+                : n.querySelector && n.querySelector('.swal2-container, .swal2-popup, .sweet-alert');
+            if (!host) continue;
+            var txt = String(host.textContent || '');
+            if (!isDupPedidoMessage(txt)) continue;
+            var html = '';
+            try {
+              var htmlBox = host.querySelector('.swal2-html-container, .swal2-content, p');
+              html = htmlBox ? htmlBox.innerHTML : host.innerHTML;
+            } catch (e0) {
+              html = txt;
+            }
+            var link = extractCapLinkFromHtml(html);
+            if (!isValidCapRequestId(link.capId)) continue;
+            maybeShowDupModal({
+              pedido: dupCheck.lastPedido || normalizePedido(getFormContext().pedido),
+              capId: link.capId,
+              capUrl: link.url,
+              requestIds: link.requestIds,
+              status: 'bloqueado'
+            });
+            dismissNativeDupSwal(
+              host.classList.contains('swal2-container') ? host : host.closest('.swal2-container') || host
+            );
+          }
+        }
+      });
+      dupCheck.observer.observe(document.documentElement, { childList: true, subtree: true });
+    } catch (e1) {}
+  }
+
+  function wrapBuiltInDupCheck() {
+    var w = getPageWindow();
+    var ws = w.WorkflowScript || w.workflowScript;
+    if (!ws) return false;
+    var name = 'verificaNumeroDePedido';
+    if (typeof ws[name] !== 'function') {
+      if (typeof ws.VerificaNumeroDePedido === 'function') name = 'VerificaNumeroDePedido';
+      else return false;
+    }
+    if (ws[name]._capDupWrapped) return true;
+    var original = ws[name];
+    ws[name] = function () {
+      var pedido = normalizePedido(arguments[0]) || normalizePedido(getFormContext().pedido);
+      if (pedido) dupCheck.lastPedido = pedido;
+      installSwalInterceptor();
+      return original.apply(this, arguments);
+    };
+    ws[name]._capDupWrapped = true;
+    return true;
+  }
+
+  function runDupCheck(pedido) {
+    var p = normalizePedido(pedido);
+    if (!pedidoLooksReady(p)) return;
+    if (!isEditablePreCapContext()) return;
+    if (dupCheck.inFlight && dupCheck.lastPedido === p) return;
+    // trocou o pedido → libera Continuar até confirmar nova duplicidade aberta
+    if (dupCheck.continuarBlocked && p !== dupCheck.blockedPedido) {
+      setContinuarBlocked(false);
+    }
+    if (
+      p === dupCheck.lastShownPedido &&
+      dupCheck.lastResult &&
+      isValidCapRequestId(dupCheck.lastResult.capId)
+    ) {
+      maybeShowDupModal(dupCheck.lastResult);
+      return;
+    }
+    dupCheck.lastPedido = p;
+    dupCheck.inFlight = true;
+    installSwalInterceptor();
+    wrapBuiltInDupCheck();
+    // chama só a função nativa do CAP — NÃO invoca gateway genérico (falso positivo)
+    var ws = getPageWindow().WorkflowScript || getPageWindow().workflowScript;
+    if (ws) {
+      var fn = ws.verificaNumeroDePedido || ws.VerificaNumeroDePedido;
+      if (typeof fn === 'function') {
+        try {
+          fn.call(ws, p);
+        } catch (e0) {
+          try {
+            fn.call(ws);
+          } catch (e1) {}
+        }
+      }
+    }
+    setTimeout(function () {
+      dupCheck.inFlight = false;
+    }, 2000);
+  }
+
+  function scheduleDupCheck(pedido) {
+    var p = normalizePedido(pedido);
+    if (!isEditablePreCapContext()) return;
+    if (!pedidoLooksReady(p)) {
+      if (!p && dupCheck.lastPedido) {
+        dupCheck.lastPedido = '';
+        dupCheck.lastShownPedido = '';
+        dupCheck.lastShownCapId = '';
+        dupCheck.lastResult = null;
+        setContinuarBlocked(false);
+        closeDupModal();
+      }
+      return;
+    }
+    if (
+      p === dupCheck.lastShownPedido &&
+      dupCheck.lastResult &&
+      isValidCapRequestId(dupCheck.lastResult.capId)
+    ) {
+      return;
+    }
+    clearTimeout(dupCheck.timer);
+    dupCheck.timer = setTimeout(function () {
+      runDupCheck(p);
+    }, 550);
+  }
+
+  function startDupCheckSystem() {
+    // limpa suppress antigo que podia ficar grudado na página
+    disableNativeSwalSuppress();
+    setContinuarBlocked(false);
+    installContinuarClickGuard();
+    installSwalInterceptor();
+    installSwalDomGuard();
+    wrapBuiltInDupCheck();
+    ensureDupModal();
+    clearInterval(dupCheck.wrapTimer);
+    // só reinsere o wrap se o CAP recriou o Swal (sem empilhar proxies)
+    dupCheck.wrapTimer = setInterval(function () {
+      var w = getPageWindow();
+      var needs =
+        !w.Swal ||
+        typeof w.Swal.fire !== 'function' ||
+        !w.Swal.fire._capDupWrapped;
+      if (needs) {
+        dupCheck.swalWrapped = false;
+        installSwalInterceptor();
+      }
+      wrapBuiltInDupCheck();
+      if (dupCheck.continuarBlocked) refreshEnviarBlockedUi();
+    }, 4000);
+    try {
+      document.addEventListener(
+        'keydown',
+        function (e) {
+          if (e.key === 'Escape') {
+            var modal = document.getElementById(CFG.dupModalId);
+            if (modal && modal.classList.contains('is-open')) {
+              e.stopPropagation();
+              closeDupModal();
+            }
+          }
+        },
+        true
+      );
+    } catch (e0) {}
   }
 
   function uid() {
@@ -997,6 +2061,9 @@
       el.closest('#' + CFG.suggestId) ||
       el.closest('#' + CFG.updateFloatId) ||
       el.closest('#' + CFG.modalId) ||
+      el.closest('#' + CFG.dupModalId) ||
+      el.closest('#' + CFG.folderModalId) ||
+      el.closest('#' + CFG.importModalId) ||
       el.closest('#' + CFG.noticesHostId) ||
       el.closest('#cap-resumo-toast')
     );
@@ -2080,6 +3147,76 @@
         '@media (max-width:960px){#' +
         CFG.noticesHostId +
         '{top:96px;left:50%;transform:translateX(-50%);width:min(560px,calc(100vw - 24px));}}' +
+        '#' +
+        CFG.dupModalId +
+        '{position:fixed;inset:0;z-index:2147483710;display:none;align-items:center;justify-content:center;' +
+        'padding:16px;background:rgba(15,23,42,.48);font-family:"Segoe UI",Tahoma,Arial,sans-serif;}' +
+        '#' +
+        CFG.dupModalId +
+        '.is-open{display:flex;}' +
+        '#' +
+        CFG.dupModalId +
+        ' .capr-dup-modal{width:min(420px,100%);background:#fff;border-radius:8px;overflow:hidden;' +
+        'box-shadow:0 20px 50px rgba(15,23,42,.28);border:1px solid #d7e0ea;padding:28px 24px 20px;text-align:center;}' +
+        '#' +
+        CFG.dupModalId +
+        ' .capr-dup-icon{display:flex;justify-content:center;margin-bottom:12px;}' +
+        '#' +
+        CFG.dupModalId +
+        ' .capr-dup-title{font-size:22px;font-weight:700;color:#595959;margin:0 0 10px;}' +
+        '#' +
+        CFG.dupModalId +
+        ' .capr-dup-msg{font-size:15px;line-height:1.45;color:#545454;margin:0 0 16px;}' +
+        '#' +
+        CFG.dupModalId +
+        ' .capr-dup-card{display:grid;gap:8px;margin:0 0 18px;text-align:left;}' +
+        '#' +
+        CFG.dupModalId +
+        ' .capr-dup-row{display:flex;align-items:center;justify-content:space-between;gap:12px;' +
+        'padding:10px 12px;background:#f7f9fc;border:1px solid #e2e8f0;border-radius:6px;}' +
+        '#' +
+        CFG.dupModalId +
+        ' .capr-dup-row span{font-size:12px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.03em;}' +
+        '#' +
+        CFG.dupModalId +
+        ' .capr-dup-row strong{font-size:14px;color:#1f2937;}' +
+        '#' +
+        CFG.dupModalId +
+        ' .capr-dup-link{font-size:14px;font-weight:700;color:#2f6b9a;text-decoration:none;}' +
+        '#' +
+        CFG.dupModalId +
+        ' .capr-dup-link:hover{text-decoration:underline;}' +
+        '#' +
+        CFG.dupModalId +
+        ' .capr-dup-foot{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;}' +
+        '#' +
+        CFG.dupModalId +
+        ' .capr-btn{border-radius:4px;border:1px solid #c5ced8;padding:8px 16px;font-size:14px;cursor:pointer;' +
+        'text-decoration:none;display:inline-flex;align-items:center;justify-content:center;}' +
+        '#' +
+        CFG.dupModalId +
+        ' .capr-btn.ghost{background:#fff;color:#374151;}' +
+        '#' +
+        CFG.dupModalId +
+        ' .capr-btn.ghost:hover{background:#eef2f6;}' +
+        '#' +
+        CFG.dupModalId +
+        ' .capr-btn.primary{background:#2f6b9a;border-color:#2a5f86;color:#fff;}' +
+        '#' +
+        CFG.dupModalId +
+        ' .capr-btn.primary:hover{background:#275a82;}' +
+        'html.capr-dup-suppress-swal .swal2-container,' +
+        'body.capr-dup-suppress-swal .swal2-container,' +
+        'html.capr-dup-suppress-swal .sweet-alert,' +
+        'body.capr-dup-suppress-swal .sweet-alert{' +
+        '/* suppress global removido — escondia o Continuar de todos os fluxos */}' +
+        '.capr-enviar-blocked,' +
+        '.capr-enviar-blocked:hover,' +
+        '.capr-enviar-blocked:focus,' +
+        '.capr-enviar-blocked:active{' +
+        'opacity:.58 !important;filter:grayscale(.75) !important;' +
+        'background:#c8c8c8 !important;border-color:#b3b3b3 !important;color:#666 !important;' +
+        'cursor:not-allowed !important;box-shadow:none !important;}' +
         '.capr-pick-hover{outline:2px solid #2f6b9a !important;outline-offset:2px !important;cursor:crosshair !important;}' +
         '#' +
         CFG.suggestId +
@@ -3522,6 +4659,7 @@
     // Sempre consulta ao abrir o CAP para o card suspenso aparecer sem depender do botão de verificar
     checkForUpdates(true);
     startNoticesSystem();
+    startDupCheckSystem();
     watchResumoField();
     clearInterval(watchTimer);
     watchTimer = setInterval(watchResumoField, 2200);
@@ -3560,6 +4698,16 @@
         lastContextKey = '';
         watchFormContext();
         toast('Avisos dispensados restaurados.');
+      });
+      GM_registerMenuCommand('CAP Resumo: testar aviso Pré CAP duplicado', function () {
+        var pedido = normalizePedido(getFormContext().pedido) || '2052938720';
+        showDupModal({
+          pedido: pedido,
+          capId: '4594008',
+          capUrl: buildCapRequestUrl('4594008'),
+          requestIds: ['4594008'],
+          status: 'bloqueado'
+        });
       });
     } catch (e) {}
 
